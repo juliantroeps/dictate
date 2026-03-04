@@ -1,33 +1,32 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleIdentifier</key>
-    <string>com.juliantroeps.dictate</string>
-    <key>CFBundleName</key>
-    <string>Dictate</string>
-    <key>CFBundleDisplayName</key>
-    <string>Dictate</string>
-    <key>CFBundleExecutable</key>
-    <string>dictate</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-    <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
-    <key>LSUIElement</key>
-    <true/>
-    <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
-    <key>NSPrincipalClass</key>
-    <string>NSApplication</string>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>Dictate needs microphone access to capture speech for transcription.</string>
-    <key>NSAccessibilityUsageDescription</key>
-    <string>Dictate needs accessibility access to insert transcribed text and listen for the activation key.</string>
+	<key>CFBundleDisplayName</key>
+	<string>Dictate</string>
+	<key>CFBundleExecutable</key>
+	<string>dictate</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.juliantroeps.dictate</string>
+	<key>CFBundleName</key>
+	<string>Dictate</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>20260304225121</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>Dictate needs accessibility access to insert transcribed text and listen for the activation key.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Dictate needs microphone access to capture speech for transcription.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
 </dict>
 </plist>
