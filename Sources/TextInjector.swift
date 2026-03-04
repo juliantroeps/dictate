@@ -3,7 +3,7 @@ import AppKit
 
 enum TextInjector {
 
-    enum Result {
+    enum Result: Equatable {
         case injected          // AX selectedText or value write
         case pasted            // clipboard + Cmd+V fallback
         case copiedToClipboard // no focused field, text on clipboard

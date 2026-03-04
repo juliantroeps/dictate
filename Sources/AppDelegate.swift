@@ -8,12 +8,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let keyListener = KeyListener()
     private let audioCapture = AudioCaptureManager()
     private let overlay = OverlayController()
-    private let engine: TranscriptionEngine = WhisperKitEngine()
+    private let settings = Settings.shared
+    private var engine: TranscriptionEngine
     private var permissionTimer: Timer?
     private var keyDownTime: DispatchTime?
     private var transcriptionTask: Task<Void, Never>?
+    private var engineLoadTask: Task<Void, Never>?
 
-    private let minHoldDuration: Double = 0.3
+    override init() {
+        self.engine = WhisperKitEngine(model: Settings.shared.whisperModel)
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -31,13 +36,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         MicrophonePermission.requestInBackground()
 
-        Task {
+        engineLoadTask = Task {
             do {
                 try await engine.prepare()
+                settings.engineState = .ready
             } catch {
+                settings.engineState = .failed
                 print("[dictate] Engine setup failed: \(error)")
             }
         }
+
+        observeModelChange()
 
         audioCapture.onAudioLevel = { [weak self] level in
             DispatchQueue.main.async {
@@ -81,7 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlay.state.phase = .recording
         overlay.show()
 
-        SystemAudioController.setMuted(true)
+        if settings.muteSystemAudio { SystemAudioController.setMuted(true) }
         do {
             try audioCapture.startRecording()
         } catch {
@@ -92,7 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleKeyUp() {
-        SystemAudioController.setMuted(false)
+        if settings.muteSystemAudio { SystemAudioController.setMuted(false) }
         let samples = audioCapture.stopRecording()
 
         guard let downTime = keyDownTime else { return }
@@ -100,7 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let elapsed = Double(DispatchTime.now().uptimeNanoseconds - downTime.uptimeNanoseconds) / 1_000_000_000
 
-        if elapsed < minHoldDuration {
+        if elapsed < settings.minHoldDuration {
             overlay.state.phase = .idle
             overlay.hide()
             return
@@ -127,6 +136,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
                 let result = TextInjector.inject(text)
+                if settings.noFocusBehavior == .discard && result == .copiedToClipboard {
+                    NSPasteboard.general.clearContents()
+                }
                 print("[dictate] Injected (\(result)): \(text)")
             } catch is CancellationError {
                 print("[dictate] Transcription cancelled")
@@ -135,6 +147,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             overlay.state.phase = .idle
             overlay.hide()
+        }
+    }
+
+    private func observeModelChange() {
+        withObservationTracking {
+            _ = settings.whisperModel
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                self?.reloadEngine()
+                self?.observeModelChange()
+            }
+        }
+    }
+
+    private func reloadEngine() {
+        engineLoadTask?.cancel()
+        settings.engineState = .loading
+        engine = WhisperKitEngine(model: settings.whisperModel)
+        engineLoadTask = Task {
+            do {
+                try await engine.prepare()
+                guard !Task.isCancelled else { return }
+                settings.engineState = .ready
+            } catch is CancellationError {
+                // superseded by another model change
+            } catch {
+                settings.engineState = .failed
+                print("[dictate] Engine reload failed: \(error)")
+            }
         }
     }
 

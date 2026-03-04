@@ -20,7 +20,7 @@ final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
 
     var isReady: Bool { whisperKit != nil }
 
-    init(model: String = "openai_whisper-small.en") {
+    init(model: String = "openai_whisper-tiny.en") {
         self.model = model
     }
 
