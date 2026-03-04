@@ -1,4 +1,5 @@
 import Foundation
+import ServiceManagement
 
 @Observable
 @MainActor
@@ -20,6 +21,21 @@ final class Settings {
     }
 
     var engineState: EngineState = .loading
+
+    var launchAtLogin: Bool {
+        get { SMAppService.mainApp.status == .enabled }
+        set {
+            do {
+                if newValue {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try SMAppService.mainApp.unregister()
+                }
+            } catch {
+                print("[dictate] Launch at login failed: \(error)")
+            }
+        }
+    }
 
     private init() {
         let defaults = UserDefaults.standard

@@ -64,9 +64,10 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("General").font(.subheadline).foregroundStyle(.secondary)
 
-                Toggle("Launch at login", isOn: .constant(false))
-                    .disabled(true)
-                    .help("Available after installing as app")
+                Toggle("Launch at login", isOn: Binding(
+                    get: { settings.launchAtLogin },
+                    set: { settings.launchAtLogin = $0 }
+                ))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 

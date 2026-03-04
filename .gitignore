@@ -8,6 +8,9 @@ DerivedData/
 # macOS
 .DS_Store
 
+# Distribution
+dist/
+
 # AI / local
 .claude/
 thoughts/

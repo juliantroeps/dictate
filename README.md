@@ -19,6 +19,7 @@ Transcription runs entirely on-device via [WhisperKit](https://github.com/argmax
 | Requirement | Version |
 |------------|---------|
 | macOS | 14 Sonoma or later |
+| Architecture | Apple Silicon only |
 | Xcode Command Line Tools | 15+ (Swift 6 toolchain) |
 | Swift | 6.0 |
 
@@ -108,3 +109,78 @@ echo "Your custom vocabulary hint here." > ~/.dictate/prompt.txt
 The file is read once at engine load time. Restart the app (or change the model) to pick up edits. The prompt is tokenised and must fit within 224 tokens.
 
 **Default prompt covers:** SSR, SSG, ISR, CI/CD, JWT, gRPC, tRPC, DNS, CDN, ORM, SDK, AWS, Next.js, Node.js, FastAPI, GraphQL, TypeScript, PostgreSQL, Tailwind CSS, Terraform, Kubernetes, React, Svelte, Deno, Bun, Supabase, Vite, Cursor, Claude, OpenAI, and more.
+
+## Distribution (local) — step-by-step
+
+Everything runs on your machine. Build and package the app, tag, push, then upload the DMG to a GitHub Release.
+
+### Scripts reference
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/build.sh` | Build `Dictate.app` into `dist/` (optionally `VERSION=...` `BUILD_NUMBER=...`). |
+| `scripts/sign.sh` | Sign the app in `dist/` (ad-hoc unless `DEVELOPER_ID` is set). |
+| `scripts/package.sh` | Build + sign + create DMG (calls `build.sh` and `sign.sh`). |
+| `scripts/tag-release.sh` | Read version from built app (run after package.sh), sync Info.plist, commit, tag, push. |
+
+---
+
+### Step 1: Build and package
+
+From the repo root, run **one** of the following.
+
+**Without Developer ID (ad-hoc signing)**
+Users will need to right-click the app and click Open the first time. No Apple certificate required.
+
+```sh
+# With a specific version (recommended for releases)
+VERSION=0.2.0 BUILD_NUMBER=2 scripts/package.sh
+
+# With default version (0.1.0 / 1)
+scripts/package.sh
+```
+
+**With Developer ID (notarized)**
+Requires an Apple Developer account and `notarytool` configured. Gatekeeper will accept the app without "Open Anyway".
+
+```sh
+export DEVELOPER_ID="Developer ID Application: Your Name (TEAMID)"
+export NOTARY_PROFILE="notarytool-profile"
+VERSION=0.2.0 BUILD_NUMBER=2 scripts/package.sh
+```
+
+**Result:** `dist/Dictate.app` and `dist/Dictate-<version>.dmg` (e.g. `dist/Dictate-0.2.0.dmg`).
+
+---
+
+### Step 2: Tag and push
+
+Run after Step 1 (script reads the version from the app you just built, then commits, tags, pushes):
+
+```sh
+scripts/tag-release.sh
+```
+
+Or manually: `git tag v0.2.0` then `git push origin v0.2.0`.
+
+---
+
+### Step 3: Create the GitHub release and upload the DMG
+
+1. On GitHub: **Releases** > **Draft a new release**.
+2. Choose the tag you pushed (e.g. `v0.2.0`).
+3. Set the release title (e.g. `v0.2.0`) and add release notes.
+4. Under assets, upload `dist/Dictate-0.2.0.dmg`.
+5. Click **Publish release**.
+
+That's it. Users download the DMG from the release page.
+
+---
+
+### End-to-end summary
+
+| Step | Without Developer ID | With Developer ID |
+|------|----------------------|-------------------|
+| 1 | `VERSION=0.2.0 scripts/package.sh` | `export DEVELOPER_ID=...` then same |
+| 2 | `scripts/tag-release.sh` (after package.sh) | Same |
+| 3 | Upload DMG to GitHub release | Same |
