@@ -119,21 +119,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         transcriptionTask = Task {
-            defer {
-                if !Task.isCancelled {
-                    overlay.state.phase = .idle
-                    overlay.hide()
-                }
-            }
             do {
                 let text = try await engine.transcribe(audioSamples: samples)
-                guard !Task.isCancelled else { return }
-                print("[dikt] Transcription: \(text)")
+                guard !Task.isCancelled, !text.isEmpty else {
+                    overlay.state.phase = .idle
+                    overlay.hide()
+                    return
+                }
+                let result = TextInjector.inject(text)
+                print("[dikt] Injected (\(result)): \(text)")
             } catch is CancellationError {
                 print("[dikt] Transcription cancelled")
             } catch {
                 print("[dikt] Transcription failed: \(error)")
             }
+            overlay.state.phase = .idle
+            overlay.hide()
         }
     }
 
