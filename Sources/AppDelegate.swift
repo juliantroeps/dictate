@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let popover = NSPopover()
     private let keyListener = KeyListener()
     private let audioCapture = AudioCaptureManager()
+    private let overlay = OverlayController()
     private var permissionTimer: Timer?
     private var keyDownTime: DispatchTime?
 
@@ -29,6 +30,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             let granted = await MicrophonePermission.request()
             print("[dikt] Microphone permission: \(granted)")
+        }
+
+        audioCapture.onAudioLevel = { [weak self] level in
+            DispatchQueue.main.async {
+                self?.overlay.state.audioLevel = level
+            }
         }
 
         keyListener.onKeyDown = { [weak self] in
@@ -60,12 +67,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        SystemAudioController.setMuted(true)
         keyDownTime = .now()
+        overlay.state.phase = .recording
+        overlay.show()
+
+        SystemAudioController.setMuted(true)
         do {
             try audioCapture.startRecording()
         } catch {
             print("[dikt] Failed to start recording: \(error)")
+            overlay.state.phase = .idle
+            overlay.hide()
         }
     }
 
@@ -79,12 +91,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let elapsed = Double(DispatchTime.now().uptimeNanoseconds - downTime.uptimeNanoseconds) / 1_000_000_000
 
         if elapsed < minHoldDuration {
-            print("[dikt] Discarded — too short (\(String(format: "%.0f", elapsed * 1000))ms)")
+            overlay.state.phase = .idle
+            overlay.hide()
             return
         }
 
+        overlay.state.phase = .processing
+
         let duration = Double(samples.count) / 16_000.0
         print("[dikt] Audio ready: \(samples.count) samples (\(String(format: "%.1f", duration))s)")
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.overlay.state.phase = .idle
+            self?.overlay.hide()
+        }
     }
 
     @objc private func togglePopover() {

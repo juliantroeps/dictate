@@ -7,6 +7,8 @@ final class AudioCaptureManager: @unchecked Sendable {
     private let bufferLock = NSLock()
     private var isRecording = false
 
+    var onAudioLevel: ((Float) -> Void)?
+
     init() {
         NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
@@ -101,6 +103,12 @@ final class AudioCaptureManager: @unchecked Sendable {
             start: floatData,
             count: Int(outputBuffer.frameLength)
         ))
+
+        var sumOfSquares: Float = 0
+        for sample in samples { sumOfSquares += sample * sample }
+        let rms = sqrt(sumOfSquares / max(Float(samples.count), 1))
+        let normalizedLevel = min(rms * 12, 1.0)
+        onAudioLevel?(normalizedLevel)
 
         bufferLock.lock()
         buffer.append(contentsOf: samples)
