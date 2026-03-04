@@ -13,7 +13,7 @@ enum PromptProvider {
         Terms: pnpm, React, Svelte, Deno, Bun, Drizzle, Prisma, Supabase, \
         Vite, Vitest, Terraform, Caddy, Turbopack, esbuild, \
         Hetzner, DynamoDB, MonogDB, Kubernetes, \
-        Cursor, Claude, OpenAI, ChatGPT. \
+        Cursor, Claude, OpenAI, ChatGPT.
         """
 
     static func resolve() -> String {
