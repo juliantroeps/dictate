@@ -28,3 +28,13 @@ git push origin HEAD
 git push origin "$TAG"
 
 echo "Tagged and pushed $TAG"
+
+# Create GitHub release and upload DMG if gh is installed
+DMG="dist/Dictate-${VERSION}.dmg"
+if command -v gh &>/dev/null && [ -f "$DMG" ]; then
+    gh release create "$TAG" "$DMG" --title "$TAG" --generate-notes
+    echo "Release created: $(gh release view "$TAG" --json url -q .url)"
+else
+    [ ! -f "$DMG" ] && echo "DMG not found: $DMG (run package.sh first)."
+    command -v gh &>/dev/null || echo "Install gh (brew install gh) and re-run to create the release and upload the DMG."
+fi

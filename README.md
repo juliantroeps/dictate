@@ -121,7 +121,7 @@ Everything runs on your machine. Build and package the app, tag, push, then uplo
 | `scripts/build.sh` | Build `Dictate.app` into `dist/` (optionally `VERSION=...` `BUILD_NUMBER=...`). |
 | `scripts/sign.sh` | Sign the app in `dist/` (ad-hoc unless `DEVELOPER_ID` is set). |
 | `scripts/package.sh` | Build + sign + create DMG (calls `build.sh` and `sign.sh`). |
-| `scripts/tag-release.sh` | Read version from built app (run after package.sh), sync Info.plist, commit, tag, push. |
+| `scripts/tag-release.sh` | After package.sh: sync Info.plist, commit, tag, push. If `gh` is installed, create GitHub release and upload DMG. |
 
 ---
 
@@ -153,27 +153,15 @@ VERSION=0.2.0 BUILD_NUMBER=2 scripts/package.sh
 
 ---
 
-### Step 2: Tag and push
+### Step 2: Tag, push, and create release
 
-Run after Step 1 (script reads the version from the app you just built, then commits, tags, pushes):
+Run after Step 1:
 
 ```sh
 scripts/tag-release.sh
 ```
 
-Or manually: `git tag v0.2.0` then `git push origin v0.2.0`.
-
----
-
-### Step 3: Create the GitHub release and upload the DMG
-
-1. On GitHub: **Releases** > **Draft a new release**.
-2. Choose the tag you pushed (e.g. `v0.2.0`).
-3. Set the release title (e.g. `v0.2.0`) and add release notes.
-4. Under assets, upload `dist/Dictate-0.2.0.dmg`.
-5. Click **Publish release**.
-
-That's it. Users download the DMG from the release page.
+This commits the version bump, creates the tag, and pushes. If you have the [GitHub CLI](https://cli.github.com/) installed (`brew install gh`) and are logged in, it also creates the GitHub release and uploads the DMG. Otherwise, create the release manually: **Releases** > **Draft a new release** > choose the tag > upload the DMG.
 
 ---
 
@@ -182,5 +170,4 @@ That's it. Users download the DMG from the release page.
 | Step | Without Developer ID | With Developer ID |
 |------|----------------------|-------------------|
 | 1 | `VERSION=0.2.0 scripts/package.sh` | `export DEVELOPER_ID=...` then same |
-| 2 | `scripts/tag-release.sh` (after package.sh) | Same |
-| 3 | Upload DMG to GitHub release | Same |
+| 2 | `scripts/tag-release.sh` (after package.sh; creates release + uploads DMG if `gh` installed) | Same |
