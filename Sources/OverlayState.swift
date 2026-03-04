@@ -1,9 +1,10 @@
 import SwiftUI
 
-enum RecordingPhase {
+enum RecordingPhase: Equatable {
     case idle
     case recording
     case processing
+    case error(String)
 }
 
 @Observable

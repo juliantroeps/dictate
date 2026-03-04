@@ -12,8 +12,12 @@ struct RecordingOverlayView: View {
                 recordingCapsule
             case .processing:
                 processingCapsule
+            case .error(let message):
+                errorCapsule(message)
             }
         }
+        .fixedSize()
+        .frame(maxWidth: .infinity)
         .animation(.easeInOut(duration: 0.15), value: state.phase == .idle)
     }
 
@@ -40,6 +44,22 @@ struct RecordingOverlayView: View {
             Text("Processing...")
                 .foregroundStyle(.white)
                 .font(.system(size: 13, weight: .medium))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: Capsule())
+        .transition(.opacity)
+    }
+
+    private func errorCapsule(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .font(.system(size: 14, weight: .medium))
+            Text(message)
+                .foregroundStyle(.white)
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(1)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)

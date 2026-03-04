@@ -115,6 +115,7 @@ struct SettingsView: View {
         .onAppear { microphoneGranted = MicrophonePermission.isGranted }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
             accessibilityGranted = AccessibilityPermission.isGranted
+            microphoneGranted = MicrophonePermission.isGranted
         }
     }
 }

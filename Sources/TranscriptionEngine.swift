@@ -65,4 +65,5 @@ final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
 
 enum TranscriptionError: Error {
     case engineNotReady
+    case timeout
 }

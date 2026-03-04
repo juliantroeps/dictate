@@ -8,6 +8,7 @@ final class AudioCaptureManager: @unchecked Sendable {
     private var isRecording = false
 
     var onAudioLevel: ((Float) -> Void)?
+    var onRecordingInterrupted: (() -> Void)?
 
     init() {
         NotificationCenter.default.addObserver(
@@ -121,6 +122,7 @@ final class AudioCaptureManager: @unchecked Sendable {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
             isRecording = false
+            onRecordingInterrupted?()
         }
     }
 }

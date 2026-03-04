@@ -36,17 +36,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         MicrophonePermission.requestInBackground()
 
-        engineLoadTask = Task {
-            do {
-                try await engine.prepare()
-                settings.engineState = .ready
-            } catch {
-                settings.engineState = .failed
-                print("[dictate] Engine setup failed: \(error)")
-            }
-        }
+        prepareEngine()
 
         observeModelChange()
+
+        audioCapture.onRecordingInterrupted = { [weak self] in
+            DispatchQueue.main.async {
+                self?.handleRecordingInterrupted()
+            }
+        }
 
         audioCapture.onAudioLevel = { [weak self] level in
             DispatchQueue.main.async {
@@ -79,7 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleKeyDown() {
         guard MicrophonePermission.isGranted else {
-            print("[dictate] Microphone permission not granted")
+            overlay.showError("Microphone access denied")
             return
         }
 
@@ -121,15 +119,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("[dictate] Audio ready: \(samples.count) samples (\(String(format: "%.1f", duration))s)")
 
         guard engine.isReady else {
-            print("[dictate] Engine not ready, discarding audio")
-            overlay.state.phase = .idle
-            overlay.hide()
+            print("[dictate] Engine not ready, attempting preparation")
+            overlay.showError("Model loading...")
+            prepareEngine(attempts: 1)
             return
         }
 
         transcriptionTask = Task {
             do {
-                let text = try await engine.transcribe(audioSamples: samples)
+                let text = try await withThrowingTaskGroup(of: String.self) { group in
+                    group.addTask {
+                        try await self.engine.transcribe(audioSamples: samples)
+                    }
+                    group.addTask {
+                        try await Task.sleep(for: .seconds(30))
+                        throw TranscriptionError.timeout
+                    }
+                    let result = try await group.next()!
+                    group.cancelAll()
+                    return result
+                }
                 guard !Task.isCancelled, !text.isEmpty else {
                     overlay.state.phase = .idle
                     overlay.hide()
@@ -140,13 +149,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     NSPasteboard.general.clearContents()
                 }
                 print("[dictate] Injected (\(result)): \(text)")
+                overlay.state.phase = .idle
+                overlay.hide()
             } catch is CancellationError {
                 print("[dictate] Transcription cancelled")
+                overlay.state.phase = .idle
+                overlay.hide()
+            } catch TranscriptionError.timeout {
+                print("[dictate] Transcription timed out")
+                overlay.showError("Transcription timed out")
             } catch {
                 print("[dictate] Transcription failed: \(error)")
+                overlay.showError("Transcription failed")
             }
-            overlay.state.phase = .idle
-            overlay.hide()
         }
     }
 
@@ -158,6 +173,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.reloadEngine()
                 self?.observeModelChange()
             }
+        }
+    }
+
+    private func handleRecordingInterrupted() {
+        if settings.muteSystemAudio { SystemAudioController.setMuted(false) }
+        keyDownTime = nil
+        transcriptionTask?.cancel()
+        transcriptionTask = nil
+        overlay.showError("Audio device disconnected")
+    }
+
+    private func prepareEngine(attempts: Int = 3) {
+        engineLoadTask = Task {
+            for attempt in 1...attempts {
+                do {
+                    try await engine.prepare()
+                    guard !Task.isCancelled else { return }
+                    settings.engineState = .ready
+                    return
+                } catch is CancellationError {
+                    return
+                } catch {
+                    print("[dictate] Engine setup attempt \(attempt)/\(attempts) failed: \(error)")
+                    if attempt < attempts {
+                        try? await Task.sleep(for: .seconds(Double(attempt) * 2))
+                    }
+                }
+            }
+            settings.engineState = .failed
+            print("[dictate] Engine setup failed after \(attempts) attempts")
         }
     }
 

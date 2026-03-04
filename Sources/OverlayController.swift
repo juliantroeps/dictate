@@ -21,6 +21,16 @@ final class OverlayController {
         }
     }
 
+    func showError(_ message: String, duration: TimeInterval = 2.0) {
+        state.phase = .error(message)
+        show()
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+            guard case .error = self?.state.phase else { return }
+            self?.state.phase = .idle
+            self?.hide()
+        }
+    }
+
     func hide() {
         guard let window else { return }
 
@@ -36,7 +46,7 @@ final class OverlayController {
 
     private func setupWindow() {
         let hostingView = NSHostingView(rootView: RecordingOverlayView(state: state))
-        hostingView.frame = NSRect(x: 0, y: 0, width: 160, height: 44)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 320, height: 44)
 
         let window = NSWindow(
             contentRect: hostingView.frame,
@@ -56,7 +66,10 @@ final class OverlayController {
     }
 
     private func positionWindow(_ window: NSWindow) {
-        guard let screen = NSScreen.main else { return }
+        let targetScreen = NSScreen.screens.first {
+            $0.frame.contains(NSEvent.mouseLocation)
+        } ?? NSScreen.main
+        guard let screen = targetScreen else { return }
         let screenFrame = screen.visibleFrame
         let windowSize = window.frame.size
 
