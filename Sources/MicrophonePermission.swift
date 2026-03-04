@@ -2,10 +2,12 @@ import AVFoundation
 
 enum MicrophonePermission {
     static var isGranted: Bool {
-        AVAudioApplication.shared.recordPermission == .granted
+        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 
-    static func request() async -> Bool {
-        await AVAudioApplication.requestRecordPermission()
+    static func requestInBackground() {
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+            print("[dikt] Microphone permission: \(granted)")
+        }
     }
 }

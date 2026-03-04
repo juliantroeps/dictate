@@ -40,9 +40,7 @@ struct SettingsView: View {
                     .foregroundStyle(.orange)
 
                 Button("Grant Permission") {
-                    Task {
-                        microphoneGranted = await MicrophonePermission.request()
-                    }
+                    MicrophonePermission.requestInBackground()
                 }
             }
 
