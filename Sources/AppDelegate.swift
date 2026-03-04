@@ -8,8 +8,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let keyListener = KeyListener()
     private let audioCapture = AudioCaptureManager()
     private let overlay = OverlayController()
+    private let engine: TranscriptionEngine = WhisperKitEngine()
     private var permissionTimer: Timer?
     private var keyDownTime: DispatchTime?
+    private var transcriptionTask: Task<Void, Never>?
 
     private let minHoldDuration: Double = 0.3
 
@@ -27,9 +29,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         AccessibilityPermission.requestIfNeeded()
 
+        MicrophonePermission.requestInBackground()
+
         Task {
-            let granted = await MicrophonePermission.request()
-            print("[dikt] Microphone permission: \(granted)")
+            do {
+                try await engine.prepare()
+            } catch {
+                print("[dikt] Engine setup failed: \(error)")
+            }
         }
 
         audioCapture.onAudioLevel = { [weak self] level in
@@ -67,6 +74,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        transcriptionTask?.cancel()
+        transcriptionTask = nil
+
         keyDownTime = .now()
         overlay.state.phase = .recording
         overlay.show()
@@ -101,9 +111,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let duration = Double(samples.count) / 16_000.0
         print("[dikt] Audio ready: \(samples.count) samples (\(String(format: "%.1f", duration))s)")
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.overlay.state.phase = .idle
-            self?.overlay.hide()
+        guard engine.isReady else {
+            print("[dikt] Engine not ready, discarding audio")
+            overlay.state.phase = .idle
+            overlay.hide()
+            return
+        }
+
+        transcriptionTask = Task {
+            defer {
+                if !Task.isCancelled {
+                    overlay.state.phase = .idle
+                    overlay.hide()
+                }
+            }
+            do {
+                let text = try await engine.transcribe(audioSamples: samples)
+                guard !Task.isCancelled else { return }
+                print("[dikt] Transcription: \(text)")
+            } catch is CancellationError {
+                print("[dikt] Transcription cancelled")
+            } catch {
+                print("[dikt] Transcription failed: \(error)")
+            }
         }
     }
 
