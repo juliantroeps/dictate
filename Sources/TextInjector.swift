@@ -26,9 +26,10 @@ enum TextInjector {
 
         print("[dikt] TextInjector: focused element role=\(role)")
 
-        // Web areas (browsers): AX attribute writes are unreliable → clipboard paste
-        if role == "AXWebArea" {
-            print("[dikt] TextInjector: AXWebArea detected, using clipboard paste")
+        // Web areas (browsers): AX attribute writes are unreliable → clipboard paste.
+        // The focused element itself is usually a child of AXWebArea, so check ancestors too.
+        if role == "AXWebArea" || isInsideWebArea(focused) {
+            print("[dikt] TextInjector: web content detected, using clipboard paste")
             pasteViaClipboard(text)
             return .pasted
         }
@@ -73,6 +74,24 @@ enum TextInjector {
         var range = CFRange(location: 0, length: 0)
         guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &range) else { return nil }
         return range
+    }
+
+    // MARK: - Web Area Detection
+
+    /// Returns true if the element is nested inside an AXWebArea (browser web content).
+    private static func isInsideWebArea(_ element: AXUIElement) -> Bool {
+        var current = element
+        for _ in 0..<20 {
+            var parentRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(current, kAXParentAttribute as CFString, &parentRef) == .success,
+                  let parent = parentRef else { break }
+            let axParent = parent as! AXUIElement
+            var roleRef: CFTypeRef?
+            AXUIElementCopyAttributeValue(axParent, kAXRoleAttribute as CFString, &roleRef)
+            if (roleRef as? String) == "AXWebArea" { return true }
+            current = axParent
+        }
+        return false
     }
 
     // MARK: - Focused Element
