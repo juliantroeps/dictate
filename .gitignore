@@ -1,0 +1,13 @@
+# Swift / SPM
+.build/
+.swiftpm/
+*.xcodeproj
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+
+# AI / local
+.claude/
+thoughts/
