@@ -2,7 +2,7 @@ import Foundation
 
 enum PromptProvider {
     static let promptFilePath = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".dikt/prompt.txt")
+        .appendingPathComponent(".dictate/prompt.txt")
 
     static let defaultPrompt = """
         Software engineer dictating about web development and infrastructure. \
@@ -20,11 +20,11 @@ enum PromptProvider {
         if let fileContents = try? String(contentsOf: promptFilePath, encoding: .utf8) {
             let trimmed = fileContents.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
-                print("[dikt] Using custom prompt from \(promptFilePath.path)")
+                print("[dictate] Using custom prompt from \(promptFilePath.path)")
                 return trimmed
             }
         }
-        print("[dikt] Using default prompt")
+        print("[dictate] Using default prompt")
         return defaultPrompt
     }
 }

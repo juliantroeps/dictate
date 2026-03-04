@@ -3,14 +3,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "dikt",
+    name: "dictate",
     platforms: [.macOS(.v14)],
     dependencies: [
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", "0.9.0"..<"0.16.0"),
     ],
     targets: [
         .executableTarget(
-            name: "dikt",
+            name: "dictate",
             dependencies: ["WhisperKit"],
             path: "Sources"
         )

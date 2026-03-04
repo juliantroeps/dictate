@@ -26,7 +26,7 @@ final class KeyListener {
             },
             userInfo: selfPtr
         ) else {
-            print("[dikt] Failed to create event tap — Accessibility permission not granted?")
+            print("[dictate] Failed to create event tap — Accessibility permission not granted?")
             return false
         }
 
@@ -35,7 +35,7 @@ final class KeyListener {
         CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
 
-        print("[dikt] Key listener started")
+        print("[dictate] Key listener started")
         return true
     }
 
@@ -49,7 +49,7 @@ final class KeyListener {
         eventTap = nil
         runLoopSource = nil
         fnDown = false
-        print("[dikt] Key listener stopped")
+        print("[dictate] Key listener stopped")
     }
 
     private func handleFlagsChanged(_ event: CGEvent) {

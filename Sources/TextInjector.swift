@@ -19,17 +19,17 @@ enum TextInjector {
         }
 
         guard let (focused, role) = focusedElement(for: frontApp) else {
-            print("[dikt] TextInjector: no focused text element, trying clipboard paste")
+            print("[dictate] TextInjector: no focused text element, trying clipboard paste")
             pasteViaClipboard(text)
             return .pasted
         }
 
-        print("[dikt] TextInjector: focused element role=\(role)")
+        print("[dictate] TextInjector: focused element role=\(role)")
 
         // Web areas (browsers): AX attribute writes are unreliable → clipboard paste.
         // The focused element itself is usually a child of AXWebArea, so check ancestors too.
         if role == "AXWebArea" || isInsideWebArea(focused) {
-            print("[dikt] TextInjector: web content detected, using clipboard paste")
+            print("[dictate] TextInjector: web content detected, using clipboard paste")
             pasteViaClipboard(text)
             return .pasted
         }
@@ -48,7 +48,7 @@ enum TextInjector {
                 if after?.location == before.location + text.utf16.count && after?.length == 0 {
                     return .injected
                 }
-                print("[dikt] TextInjector: Strategy 1 silently failed (cursor didn't advance), falling through")
+                print("[dictate] TextInjector: Strategy 1 silently failed (cursor didn't advance), falling through")
             } else {
                 return .injected  // can't verify, trust the return value
             }
@@ -56,12 +56,12 @@ enum TextInjector {
 
         // Strategy 2: Read AXValue + AXSelectedTextRange, splice, write back
         if insertViaValueSplice(element: focused, text: text) {
-            print("[dikt] TextInjector: Strategy 2 (value-splice) succeeded")
+            print("[dictate] TextInjector: Strategy 2 (value-splice) succeeded")
             return .injected
         }
 
         // Strategy 3: Clipboard + Cmd+V
-        print("[dikt] TextInjector: falling back to clipboard paste")
+        print("[dictate] TextInjector: falling back to clipboard paste")
         pasteViaClipboard(text)
         return .pasted
     }
@@ -106,7 +106,7 @@ enum TextInjector {
             &focusedValue
         )
         guard result == .success, let element = focusedValue else {
-            print("[dikt] TextInjector: no focused UI element (app=\(frontApp.localizedName ?? "?"))")
+            print("[dictate] TextInjector: no focused UI element (app=\(frontApp.localizedName ?? "?"))")
             return nil
         }
 
@@ -130,7 +130,7 @@ enum TextInjector {
             return (axElement, role)
         }
 
-        print("[dikt] TextInjector: focused element not a text input (role=\(role))")
+        print("[dictate] TextInjector: focused element not a text input (role=\(role))")
         return nil
     }
 
@@ -160,7 +160,7 @@ enum TextInjector {
         // Verify the write took effect
         guard let afterRange = selectedTextRange(of: element),
               afterRange.location == newCursorPos, afterRange.length == 0 else {
-            print("[dikt] TextInjector: Strategy 2 silently failed (cursor didn't advance), falling through")
+            print("[dictate] TextInjector: Strategy 2 silently failed (cursor didn't advance), falling through")
             return false
         }
 

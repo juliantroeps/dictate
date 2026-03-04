@@ -6,7 +6,7 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Text("dikt")
+            Text("dictate")
                 .font(.headline)
 
             Divider()
@@ -24,7 +24,7 @@ struct SettingsView: View {
                     )
                 }
 
-                Text("Click +, then navigate to .build/debug/dikt and enable it.")
+                Text("Click +, then navigate to .build/debug/dictate and enable it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

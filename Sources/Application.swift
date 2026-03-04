@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 @main
-struct DiktApp {
+struct Application {
     static func main() {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)

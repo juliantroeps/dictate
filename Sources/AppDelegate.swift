@@ -19,7 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "dikt")
+            button.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "dictate")
             button.action = #selector(togglePopover)
             button.target = self
         }
@@ -35,7 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 try await engine.prepare()
             } catch {
-                print("[dikt] Engine setup failed: \(error)")
+                print("[dictate] Engine setup failed: \(error)")
             }
         }
 
@@ -70,7 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleKeyDown() {
         guard MicrophonePermission.isGranted else {
-            print("[dikt] Microphone permission not granted")
+            print("[dictate] Microphone permission not granted")
             return
         }
 
@@ -85,7 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try audioCapture.startRecording()
         } catch {
-            print("[dikt] Failed to start recording: \(error)")
+            print("[dictate] Failed to start recording: \(error)")
             overlay.state.phase = .idle
             overlay.hide()
         }
@@ -109,10 +109,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlay.state.phase = .processing
 
         let duration = Double(samples.count) / 16_000.0
-        print("[dikt] Audio ready: \(samples.count) samples (\(String(format: "%.1f", duration))s)")
+        print("[dictate] Audio ready: \(samples.count) samples (\(String(format: "%.1f", duration))s)")
 
         guard engine.isReady else {
-            print("[dikt] Engine not ready, discarding audio")
+            print("[dictate] Engine not ready, discarding audio")
             overlay.state.phase = .idle
             overlay.hide()
             return
@@ -127,11 +127,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
                 let result = TextInjector.inject(text)
-                print("[dikt] Injected (\(result)): \(text)")
+                print("[dictate] Injected (\(result)): \(text)")
             } catch is CancellationError {
-                print("[dikt] Transcription cancelled")
+                print("[dictate] Transcription cancelled")
             } catch {
-                print("[dikt] Transcription failed: \(error)")
+                print("[dictate] Transcription failed: \(error)")
             }
             overlay.state.phase = .idle
             overlay.hide()

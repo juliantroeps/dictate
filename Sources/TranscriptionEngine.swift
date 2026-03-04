@@ -26,7 +26,7 @@ final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
 
     func prepare() async throws {
         guard whisperKit == nil else { return }
-        print("[dikt] Loading WhisperKit model: \(model)")
+        print("[dictate] Loading WhisperKit model: \(model)")
         let config = WhisperKitConfig(model: model, load: true)
         let wk = try await WhisperKit(config)
         whisperKit = wk
@@ -36,15 +36,15 @@ final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
             let encoded = tokenizer.encode(text: " " + prompt.trimmingCharacters(in: .whitespaces))
                 .filter { $0 < tokenizer.specialTokens.specialTokenBegin }
             promptTokens = encoded
-            print("[dikt] Prompt encoded: \(encoded.count) tokens")
+            print("[dictate] Prompt encoded: \(encoded.count) tokens")
             if encoded.count > 224 {
-                print("[dikt] WARNING: Prompt exceeds 224 tokens (\(encoded.count)), will be truncated by decoder")
+                print("[dictate] WARNING: Prompt exceeds 224 tokens (\(encoded.count)), will be truncated by decoder")
             }
         } else {
-            print("[dikt] WARNING: Tokenizer not available, skipping prompt conditioning")
+            print("[dictate] WARNING: Tokenizer not available, skipping prompt conditioning")
         }
 
-        print("[dikt] WhisperKit ready")
+        print("[dictate] WhisperKit ready")
     }
 
     func transcribe(audioSamples: [Float]) async throws -> String {

@@ -49,7 +49,7 @@ final class AudioCaptureManager: @unchecked Sendable {
         engine.prepare()
         try engine.start()
         isRecording = true
-        print("[dikt] Recording started")
+        print("[dictate] Recording started")
     }
 
     func stopRecording() -> [Float] {
@@ -65,7 +65,7 @@ final class AudioCaptureManager: @unchecked Sendable {
         bufferLock.unlock()
 
         let duration = Double(captured.count) / 16_000.0
-        print("[dikt] Captured \(captured.count) samples (\(String(format: "%.1f", duration))s)")
+        print("[dictate] Captured \(captured.count) samples (\(String(format: "%.1f", duration))s)")
         return captured
     }
 
@@ -94,7 +94,7 @@ final class AudioCaptureManager: @unchecked Sendable {
         }
 
         if let error {
-            print("[dikt] Conversion error: \(error)")
+            print("[dictate] Conversion error: \(error)")
             return
         }
 
@@ -117,7 +117,7 @@ final class AudioCaptureManager: @unchecked Sendable {
 
     private func handleConfigChange() {
         if isRecording {
-            print("[dikt] Audio config changed during recording")
+            print("[dictate] Audio config changed during recording")
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
             isRecording = false

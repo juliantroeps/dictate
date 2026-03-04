@@ -31,7 +31,7 @@ enum SystemAudioController {
 
         let status = AudioObjectSetPropertyData(deviceID, &address, 0, nil, size, &mute)
         if status != noErr {
-            print("[dikt] Failed to \(muted ? "mute" : "unmute") audio: \(status)")
+            print("[dictate] Failed to \(muted ? "mute" : "unmute") audio: \(status)")
         }
     }
 }
