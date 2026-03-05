@@ -22,7 +22,7 @@ TAG="v$VERSION"
 
 # Commit, tag, push
 git add "$RESOURCES_PLIST"
-git commit -m "Bump version to $VERSION ($BUILD_NUMBER)"
+git commit -m "chore(version): bump version to $VERSION ($BUILD_NUMBER)"
 git tag "$TAG"
 git push origin HEAD
 git push origin "$TAG"
