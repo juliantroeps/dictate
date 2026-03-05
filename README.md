@@ -1,173 +1,101 @@
 # dictate
 
-A macOS app that transcribes your voice and injects the result directly into any text field — system-wide and on-device.
+A macOS menu bar app that transcribes your voice and injects the result directly into any text field — system-wide and on-device.
 
-Hold the **Fn / Globe key**, speak, release. Text appears at the cursor.
+Hold **Fn / Globe**, speak, release. Text appears at the cursor.
 
-Transcription runs entirely on-device via [WhisperKit](https://github.com/argmaxinc/WhisperKit). 
+Transcription runs entirely on-device via [WhisperKit](https://github.com/argmaxinc/WhisperKit).
 
 ## Features
 
-- Hold-to-record wherever you want
+- Hold-to-record from anywhere
 - On-device transcription (Whisper tiny/base/small/medium)
-- Smart text injection in Browser, Terminal, and other apps
+- Smart text injection — works in browsers, terminals, Electron apps, and native apps
 - System audio mute while recording
-- Settings UI in the menu bar
+- Customizable vocabulary hints for domain-specific terminology
+- Menu bar settings UI
 
 ## Requirements
 
-| Requirement | Version |
-|------------|---------|
-| macOS | 14 Sonoma or later |
-| Architecture | Apple Silicon only |
-| Xcode Command Line Tools | 15+ (Swift 6 toolchain) |
-| Swift | 6.0 |
+- macOS 14 Sonoma or later
+- Apple Silicon
+- Swift 6.0 / Xcode 16+
 
-Install tools if needed:
+## Development
+
+### Setup
 
 ```sh
 xcode-select --install
 ```
 
-## Build & run
-
-### 1. Clone
+### Build
 
 ```sh
-git clone <repo-url>
-cd dictate
-```
-
-### 2. Build
-
-```sh
-# Debug (development)
 swift build
-
-# Release (optimised)
-# WMO is disabled due to a compiler crash in the Tokenizers dependency
-swift build -c release -Xswiftc -no-whole-module-optimization
 ```
 
-WhisperKit and its transitive dependencies are fetched automatically by SPM. First build takes a while.
+SPM fetches WhisperKit and dependencies automatically. First build takes a while.
 
-### 3. Run
-
-**Do not use `swift run`.** It rebuilds the binary before launching, which invalidates the macOS TCC accessibility entry. Always run the compiled binary directly:
+### Run
 
 ```sh
-# Debug
 .build/debug/dictate
-
-# Release
-.build/release/dictate
 ```
 
-## Permissions
+### Permissions
 
-Two permissions are required. The app requests them on first launch.
+Two permissions are required on first launch:
 
-### Accessibility
-
-Required to listen for the Fn key globally (CGEventTap) and to inject text via the Accessibility API.
-
-**Grant to the process that launches the binary**, not to the binary itself:
-- Running from Terminal → grant to **Terminal.app**
-- Running from iTerm2 → grant to **iTerm2.app**
-
+**Accessibility** — for the global Fn key listener (CGEventTap) and text injection via the Accessibility API.
+Grant to the *terminal* launching the binary (Terminal.app, iTerm2, etc.), not to the binary itself.
 Go to **System Settings → Privacy & Security → Accessibility** and enable the entry.
 
-The app polls every 2 seconds and starts the key listener automatically once granted.
-
-### Microphone
-
-Requested automatically on launch. Grant it when prompted, or go to **System Settings → Privacy & Security → Microphone**.
+**Microphone** — requested automatically on launch.
 
 ## Settings
 
-Click the **mic icon** in the menu bar to open the settings popover.
+Click the mic icon in the menu bar to open settings.
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| Model | tiny.en (~75 MB) | Whisper model size. Larger = more accurate, slower to load |
-| No text field | Copy to clipboard | What to do when no focused text field is found |
-| Mute system audio | On | Mutes speaker output while recording |
 
-Model downloads are handled by WhisperKit and cached in `~/Library/Caches/`. Changing the model triggers a live reload.
+| Setting           | Default           | Description                                                 |
+| ----------------- | ----------------- | ----------------------------------------------------------- |
+| Model             | tiny.en (~75 MB)  | Whisper model size. Larger = more accurate, slower to load and takes up more RAM. |
+| No text field     | Copy to clipboard | Fallback when no focused text field is found.               |
+| Mute system audio | On                | Mutes speaker output while recording.                       |
 
-## Prompt conditioning
 
-WhisperKit supports prefix prompts that bias the decoder toward specific terms and casing. The app ships a default prompt tuned for software engineering dictation.
+Model files are downloaded by WhisperKit and cached in `~/Library/Caches/`.
+
+## Vocabulary hints
+
+WhisperKit supports prefix prompts to bias the decoder toward specific terms and casing. A default prompt tuned for software engineering is included.
 
 To override it, create `~/.dictate/prompt.txt`:
 
 ```sh
 mkdir -p ~/.dictate
-echo "Your custom vocabulary hint here." > ~/.dictate/prompt.txt
+echo "Your custom vocabulary here." > ~/.dictate/prompt.txt
 ```
 
-The file is read once at engine load time. Restart the app (or change the model) to pick up edits. The prompt is tokenised and must fit within 224 tokens.
+The file is read once at engine load time. Restart the app or change the model to pick up edits. Max 224 tokens.
 
-**Default prompt covers:** SSR, SSG, ISR, CI/CD, JWT, gRPC, tRPC, DNS, CDN, ORM, SDK, AWS, Next.js, Node.js, FastAPI, GraphQL, TypeScript, PostgreSQL, Tailwind CSS, Terraform, Kubernetes, React, Svelte, Deno, Bun, Supabase, Vite, Cursor, Claude, OpenAI, and more.
+## Release
 
-## Distribution (local) — step-by-step
 
-Everything runs on your machine. Build and package the app, tag, push, then upload the DMG to a GitHub Release.
+| Script                   | Purpose                                               |
+| ------------------------ | ----------------------------------------------------- |
+| `scripts/build.sh`       | Build `Dictate.app` into `dist/`                      |
+| `scripts/sign.sh`        | Sign the app (ad-hoc unless `DEVELOPER_ID` is set)    |
+| `scripts/package.sh`     | build + sign + create DMG                             |
+| `scripts/tag-release.sh` | commit version bump, tag, push, create GitHub release |
 
-### Scripts reference
 
-| Script | Purpose |
-|--------|---------|
-| `scripts/build.sh` | Build `Dictate.app` into `dist/` (optionally `VERSION=...` `BUILD_NUMBER=...`). |
-| `scripts/sign.sh` | Sign the app in `dist/` (ad-hoc unless `DEVELOPER_ID` is set). |
-| `scripts/package.sh` | Build + sign + create DMG (calls `build.sh` and `sign.sh`). |
-| `scripts/tag-release.sh` | After package.sh: sync Info.plist, commit, tag, push. If `gh` is installed, create GitHub release and upload DMG. |
-
----
-
-### Step 1: Build and package
-
-From the repo root, run **one** of the following.
-
-**Without Developer ID (ad-hoc signing)**
-Users will need to right-click the app and click Open the first time. No Apple certificate required.
+Build, sign, and package into a DMG, then tag and publish:
 
 ```sh
-# With a specific version (recommended for releases)
-VERSION=0.2.0 BUILD_NUMBER=2 scripts/package.sh
-
-# With default version (0.1.0 / 1)
-scripts/package.sh
-```
-
-**With Developer ID (notarized)**
-Requires an Apple Developer account and `notarytool` configured. Gatekeeper will accept the app without "Open Anyway".
-
-```sh
-export DEVELOPER_ID="Developer ID Application: Your Name (TEAMID)"
-export NOTARY_PROFILE="notarytool-profile"
-VERSION=0.2.0 BUILD_NUMBER=2 scripts/package.sh
-```
-
-**Result:** `dist/Dictate.app` and `dist/Dictate-<version>.dmg` (e.g. `dist/Dictate-0.2.0.dmg`).
-
----
-
-### Step 2: Tag, push, and create release
-
-Run after Step 1:
-
-```sh
+VERSION=0.2.0 scripts/package.sh
 scripts/tag-release.sh
 ```
 
-This commits the version bump, creates the tag, and pushes. If you have the [GitHub CLI](https://cli.github.com/) installed (`brew install gh`) and are logged in, it also creates the GitHub release and uploads the DMG. Otherwise, create the release manually: **Releases** > **Draft a new release** > choose the tag > upload the DMG.
-
----
-
-### End-to-end summary
-
-| Step | Without Developer ID | With Developer ID |
-|------|----------------------|-------------------|
-| 1 | `VERSION=0.2.0 scripts/package.sh` | `export DEVELOPER_ID=...` then same |
-| 2 | `scripts/tag-release.sh` (after package.sh; creates release + uploads DMG if `gh` installed) | Same |
+`tag-release.sh` commits the version bump, creates a git tag, pushes, and — if `gh` is installed and authenticated — creates a GitHub release and uploads the dmg file.
