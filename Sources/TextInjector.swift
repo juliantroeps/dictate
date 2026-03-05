@@ -170,8 +170,30 @@ enum TextInjector {
     // MARK: - Strategy 3: Clipboard Paste
 
     private static func pasteViaClipboard(_ text: String) {
-        copyToClipboard(text)
+        let pasteboard = NSPasteboard.general
+
+        // Save current clipboard contents
+        let savedItems = (pasteboard.pasteboardItems ?? []).map { item -> NSPasteboardItem in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    copy.setData(data, forType: type)
+                }
+            }
+            return copy
+        }
+
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
         simulateCmdV()
+
+        // Restore original clipboard after paste has time to process
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            NSPasteboard.general.clearContents()
+            if !savedItems.isEmpty {
+                NSPasteboard.general.writeObjects(savedItems)
+            }
+        }
     }
 
     private static func copyToClipboard(_ text: String) {

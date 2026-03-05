@@ -8,6 +8,8 @@ struct RecordingOverlayView: View {
             switch state.phase {
             case .idle:
                 EmptyView()
+            case .modelLoading:
+                modelLoadingCapsule
             case .recording:
                 recordingCapsule
             case .processing:
@@ -19,6 +21,19 @@ struct RecordingOverlayView: View {
         .fixedSize()
         .frame(maxWidth: .infinity)
         .animation(.easeInOut(duration: 0.15), value: state.phase == .idle)
+    }
+
+    private var modelLoadingCapsule: some View {
+        HStack(spacing: 8) {
+            ThreeDotsAnimation()
+            Text("Loading model")
+                .foregroundStyle(.white)
+                .font(.system(size: 13, weight: .medium))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: Capsule())
+        .transition(.opacity)
     }
 
     private var recordingCapsule: some View {
@@ -37,11 +52,8 @@ struct RecordingOverlayView: View {
 
     private var processingCapsule: some View {
         HStack(spacing: 8) {
-            ProgressView()
-                .controlSize(.small)
-                .tint(.white)
-
-            Text("Processing...")
+            ThreeDotsAnimation()
+            Text("Processing")
                 .foregroundStyle(.white)
                 .font(.system(size: 13, weight: .medium))
         }
@@ -65,6 +77,31 @@ struct RecordingOverlayView: View {
         .padding(.vertical, 10)
         .background(.ultraThinMaterial, in: Capsule())
         .transition(.opacity)
+    }
+}
+
+struct ThreeDotsAnimation: View {
+    @State private var animating = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(0..<3, id: \.self) { i in
+                Circle()
+                    .fill(.white)
+                    .frame(width: 5, height: 5)
+                    .scaleEffect(animating ? 1.0 : 0.4)
+                    .opacity(animating ? 1.0 : 0.3)
+                    .animation(
+                        .easeInOut(duration: 0.45)
+                            .repeatForever(autoreverses: true)
+                            .delay(Double(i) * 0.15),
+                        value: animating
+                    )
+            }
+        }
+        .frame(height: 20)
+        .onAppear { animating = true }
+        .onDisappear { animating = false }
     }
 }
 

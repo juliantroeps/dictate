@@ -2,6 +2,7 @@ import SwiftUI
 
 enum RecordingPhase: Equatable {
     case idle
+    case modelLoading
     case recording
     case processing
     case error(String)

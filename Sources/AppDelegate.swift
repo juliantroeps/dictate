@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var keyDownTime: DispatchTime?
     private var transcriptionTask: Task<Void, Never>?
     private var engineLoadTask: Task<Void, Never>?
+    private var eventMonitor: Any?
 
     override init() {
         self.engine = WhisperKitEngine(model: Settings.shared.whisperModel)
@@ -186,13 +187,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func prepareEngine(attempts: Int = 3) {
         engineLoadTask = Task {
+            // Suppress pill if model loads quickly (cached case)
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            if !engine.isReady {
+                overlay.showModelLoading()
+            }
+
             for attempt in 1...attempts {
                 do {
                     try await engine.prepare()
-                    guard !Task.isCancelled else { return }
+                    guard !Task.isCancelled else {
+                        overlay.hideModelLoading()
+                        return
+                    }
                     settings.engineState = .ready
+                    overlay.hideModelLoading()
                     return
                 } catch is CancellationError {
+                    overlay.hideModelLoading()
                     return
                 } catch {
                     print("[dictate] Engine setup attempt \(attempt)/\(attempts) failed: \(error)")
@@ -202,23 +215,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             settings.engineState = .failed
+            overlay.hideModelLoading()
             print("[dictate] Engine setup failed after \(attempts) attempts")
         }
     }
 
     private func reloadEngine() {
         engineLoadTask?.cancel()
+        engine.unload()
         settings.engineState = .loading
         engine = WhisperKitEngine(model: settings.whisperModel)
+        overlay.showModelLoading()
         engineLoadTask = Task {
             do {
                 try await engine.prepare()
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else {
+                    overlay.hideModelLoading()
+                    return
+                }
                 settings.engineState = .ready
+                overlay.hideModelLoading()
             } catch is CancellationError {
-                // superseded by another model change
+                overlay.hideModelLoading()
             } catch {
                 settings.engineState = .failed
+                overlay.hideModelLoading()
                 print("[dictate] Engine reload failed: \(error)")
             }
         }
@@ -227,9 +248,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func togglePopover() {
         guard let button = statusItem.button else { return }
         if popover.isShown {
-            popover.performClose(nil)
+            closePopover()
         } else {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            eventMonitor = NSEvent.addGlobalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+            ) { [weak self] _ in
+                self?.closePopover()
+            }
+        }
+    }
+
+    private func closePopover() {
+        popover.performClose(nil)
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+            eventMonitor = nil
         }
     }
 }

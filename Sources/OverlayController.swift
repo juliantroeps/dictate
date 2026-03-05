@@ -21,6 +21,17 @@ final class OverlayController {
         }
     }
 
+    func showModelLoading() {
+        state.phase = .modelLoading
+        show()
+    }
+
+    func hideModelLoading() {
+        guard state.phase == .modelLoading else { return }
+        state.phase = .idle
+        hide()
+    }
+
     func showError(_ message: String, duration: TimeInterval = 2.0) {
         state.phase = .error(message)
         show()

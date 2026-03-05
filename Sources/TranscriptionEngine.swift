@@ -8,6 +8,7 @@ protocol TranscriptionEngine: Sendable {
     var isReady: Bool { get }
     func prepare() async throws
     func transcribe(audioSamples: [Float]) async throws -> String
+    func unload()
 }
 
 // MARK: - WhisperKitEngine
@@ -45,6 +46,11 @@ final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
         }
 
         print("[dictate] WhisperKit ready")
+    }
+
+    func unload() {
+        whisperKit = nil
+        promptTokens = nil
     }
 
     func transcribe(audioSamples: [Float]) async throws -> String {
