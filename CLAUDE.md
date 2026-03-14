@@ -18,9 +18,11 @@ No tests exist. No linter configured.
 ## Release
 
 ```sh
-VERSION=x.y.z scripts/package.sh   # build + sign + DMG in dist/
+VERSION=x.y.z scripts/package.sh   # build + sign + DMG in dist/ (bundles install.sh)
 scripts/tag-release.sh              # commit, tag, push, gh release
 ```
+
+`scripts/install.sh` is bundled into the DMG for end-user installation. It copies the app to `/Applications`, strips quarantine, and ejects the DMG.
 
 ## Architecture
 

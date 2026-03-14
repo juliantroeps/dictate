@@ -14,7 +14,11 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Text("dictate").font(.headline)
+            HStack(spacing: 6) {
+                Text("dictate").font(.headline)
+                Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Dev")")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
 
             Divider()
 
