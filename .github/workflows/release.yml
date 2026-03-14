@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    runs-on: macos-15
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine new version
+        id: semver
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          dry_run: true
+          default_bump: false
+
+      - name: Cache Swift packages
+        if: steps.semver.outputs.new_version != ''
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/.swiftpm
+          key: ${{ runner.os }}-swift-${{ hashFiles('Package.resolved') }}
+          restore-keys: ${{ runner.os }}-swift-
+
+      - name: Build and package
+        if: steps.semver.outputs.new_version != ''
+        env:
+          VERSION: ${{ steps.semver.outputs.new_version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: scripts/package.sh
+
+      - name: Push tag
+        if: steps.semver.outputs.new_version != ''
+        env:
+          TAG: ${{ steps.semver.outputs.new_tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub release
+        if: steps.semver.outputs.new_version != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.semver.outputs.new_version }}
+          TAG: ${{ steps.semver.outputs.new_tag }}
+        run: |
+          gh release create "$TAG" \
+            "dist/Dictate-${VERSION}.dmg" \
+            --title "$TAG" \
+            --generate-notes
