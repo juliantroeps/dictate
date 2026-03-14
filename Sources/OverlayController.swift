@@ -68,9 +68,9 @@ final class OverlayController {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
-        window.level = .floating
+        window.level = .screenSaver
         window.ignoresMouseEvents = true
-        window.collectionBehavior = [.canJoinAllSpaces, .stationary]
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         window.contentView = hostingView
 
         self.window = window
@@ -81,7 +81,7 @@ final class OverlayController {
             $0.frame.contains(NSEvent.mouseLocation)
         } ?? NSScreen.main
         guard let screen = targetScreen else { return }
-        let screenFrame = screen.visibleFrame
+        let screenFrame = screen.frame
         let windowSize = window.frame.size
 
         let x = screenFrame.midX - windowSize.width / 2
