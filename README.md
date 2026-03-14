@@ -15,11 +15,34 @@ Transcription runs entirely on-device via [WhisperKit](https://github.com/argmax
 - Customizable vocabulary hints for domain-specific terminology
 - Menu bar settings UI
 
+## Installation
+
+### From DMG (recommended)
+
+Download the latest DMG from [Releases](../../releases), open it, and run:
+
+```sh
+bash /Volumes/Dictate/install.sh
+```
+
+This copies `Dictate.app` to `/Applications` and removes the quarantine flag.
+
+### From source
+
+```sh
+git clone https://github.com/juliantroeps/dictate.git
+cd dictate
+scripts/build.sh
+cp -R dist/Dictate.app /Applications/
+```
+
+No quarantine stripping needed when building locally.
+
 ## Requirements
 
 - macOS 14 Sonoma or later
 - Apple Silicon
-- Swift 6.0 / Xcode 16+
+- Swift 6.0 / Xcode 16+ (development only)
 
 ## Development
 
@@ -83,12 +106,13 @@ The file is read once at engine load time. Restart the app or change the model t
 ## Release
 
 
-| Script                   | Purpose                                               |
-| ------------------------ | ----------------------------------------------------- |
-| `scripts/build.sh`       | Build `Dictate.app` into `dist/`                      |
-| `scripts/sign.sh`        | Sign the app (ad-hoc unless `DEVELOPER_ID` is set)    |
-| `scripts/package.sh`     | build + sign + create DMG                             |
-| `scripts/tag-release.sh` | commit version bump, tag, push, create GitHub release |
+| Script                    | Purpose                                               |
+| ------------------------- | ----------------------------------------------------- |
+| `scripts/build.sh`        | Build `Dictate.app` into `dist/`                      |
+| `scripts/sign.sh`         | Sign the app (ad-hoc unless `DEVELOPER_ID` is set)    |
+| `scripts/package.sh`      | build + sign + create DMG (bundles `install.sh`)      |
+| `scripts/install.sh`      | Install app to `/Applications`, strip quarantine      |
+| `scripts/tag-release.sh`  | commit version bump, tag, push, create GitHub release |
 
 
 Build, sign, and package into a DMG, then tag and publish:
