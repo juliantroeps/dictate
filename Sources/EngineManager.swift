@@ -14,11 +14,13 @@ final class EngineManager {
     var isReady: Bool { engine.isReady }
 
     func prepare(attempts: Int = 3) {
+        loadTask?.cancel()
         loadTask = Task {
             // Suppress loading indicator if model loads quickly (cached)
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else { return }
             if !engine.isReady {
+                settings.engineState = .loading
                 onLoadingStateChanged?(true)
             }
 

@@ -52,6 +52,7 @@ final class DictationCoordinator {
             try audioCapture.startRecording()
         } catch {
             print("[dictate] Failed to start recording: \(error)")
+            if settings.muteSystemAudio { SystemAudioController.setMuted(false) }
             overlay.state.phase = .idle
             overlay.hide()
         }
@@ -84,11 +85,12 @@ final class DictationCoordinator {
             return
         }
 
+        let engine = engineManager.engine
         transcriptionTask = Task {
             do {
                 let text = try await withThrowingTaskGroup(of: String.self) { group in
                     group.addTask {
-                        try await self.engineManager.engine.transcribe(audioSamples: samples)
+                        try await engine.transcribe(audioSamples: samples)
                     }
                     group.addTask {
                         try await Task.sleep(for: .seconds(30))
