@@ -12,12 +12,20 @@ scripts/sign.sh "$APP"
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist")
 DMG="dist/Dictate-${VERSION}.dmg"
 
+# Stage DMG contents (app + installer)
+STAGING="dist/dmg-staging"
+rm -rf "$STAGING"
+mkdir -p "$STAGING"
+cp -R "$APP" "$STAGING/"
+cp "$(dirname "$0")/install.sh" "$STAGING/"
+chmod +x "$STAGING/install.sh"
+
 # Create DMG
 if command -v create-dmg &>/dev/null; then
-    create-dmg --overwrite "$APP" dist/ || true
+    create-dmg --overwrite "$STAGING" dist/ || true
     mv "dist/Dictate ${VERSION}.dmg" "$DMG" 2>/dev/null || true
 else
-    hdiutil create -volname "Dictate" -srcfolder "$APP" \
+    hdiutil create -volname "Dictate" -srcfolder "$STAGING" \
         -ov -format UDZO "$DMG"
 fi
 
@@ -33,11 +41,12 @@ if [ -n "$IDENTITY" ] && [ "$IDENTITY" != "-" ]; then
     rm /tmp/Dictate.app.zip
 
     rm -f "$DMG"
+    cp -R "$APP" "$STAGING/"  # refresh staged app after stapling
     if command -v create-dmg &>/dev/null; then
-        create-dmg --overwrite "$APP" dist/ || true
+        create-dmg --overwrite "$STAGING" dist/ || true
         mv "dist/Dictate ${VERSION}.dmg" "$DMG" 2>/dev/null || true
     else
-        hdiutil create -volname "Dictate" -srcfolder "$APP" \
+        hdiutil create -volname "Dictate" -srcfolder "$STAGING" \
             -ov -format UDZO "$DMG"
     fi
 
@@ -52,3 +61,5 @@ else
     echo "Skipped notarization (no DEVELOPER_ID set)"
     echo "To notarize: export DEVELOPER_ID='Developer ID Application: Name (TEAMID)'"
 fi
+
+rm -rf "$STAGING"
