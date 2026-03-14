@@ -22,11 +22,21 @@ chmod +x "$STAGING/install.sh"
 
 # Create DMG
 if command -v create-dmg &>/dev/null; then
-    create-dmg --overwrite "$STAGING" dist/ || true
-    mv "dist/Dictate ${VERSION}.dmg" "$DMG" 2>/dev/null || true
+    if ! create-dmg --overwrite "$STAGING" dist/; then
+        echo "create-dmg failed, falling back to hdiutil"
+        hdiutil create -volname "Dictate" -srcfolder "$STAGING" \
+            -ov -format UDZO "$DMG"
+    else
+        mv "dist/Dictate ${VERSION}.dmg" "$DMG" 2>/dev/null || true
+    fi
 else
     hdiutil create -volname "Dictate" -srcfolder "$STAGING" \
         -ov -format UDZO "$DMG"
+fi
+
+if [ ! -f "$DMG" ]; then
+    echo "Error: DMG not created at $DMG"
+    exit 1
 fi
 
 echo "Created: $DMG"
@@ -41,13 +51,24 @@ if [ -n "$IDENTITY" ] && [ "$IDENTITY" != "-" ]; then
     rm /tmp/Dictate.app.zip
 
     rm -f "$DMG"
+    rm -rf "$STAGING/Dictate.app"
     cp -R "$APP" "$STAGING/"  # refresh staged app after stapling
     if command -v create-dmg &>/dev/null; then
-        create-dmg --overwrite "$STAGING" dist/ || true
-        mv "dist/Dictate ${VERSION}.dmg" "$DMG" 2>/dev/null || true
+        if ! create-dmg --overwrite "$STAGING" dist/; then
+            echo "create-dmg failed, falling back to hdiutil"
+            hdiutil create -volname "Dictate" -srcfolder "$STAGING" \
+                -ov -format UDZO "$DMG"
+        else
+            mv "dist/Dictate ${VERSION}.dmg" "$DMG" 2>/dev/null || true
+        fi
     else
         hdiutil create -volname "Dictate" -srcfolder "$STAGING" \
             -ov -format UDZO "$DMG"
+    fi
+
+    if [ ! -f "$DMG" ]; then
+        echo "Error: DMG not created at $DMG"
+        exit 1
     fi
 
     codesign -f -s "$IDENTITY" --timestamp "$DMG"

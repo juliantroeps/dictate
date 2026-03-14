@@ -22,10 +22,15 @@ elif [ -d "$DEST" ]; then
 fi
 
 echo "Installing $APP_NAME to $INSTALL_DIR..."
-cp -R "$SOURCE_APP" "$INSTALL_DIR/"
+if ! cp -R "$SOURCE_APP" "$INSTALL_DIR/"; then
+    echo "Error: Permission denied. Try: sudo $0"
+    exit 1
+fi
 
 echo "Removing quarantine..."
-xattr -dr com.apple.quarantine "$DEST"
+if xattr "$DEST" 2>/dev/null | grep -q com.apple.quarantine; then
+    xattr -dr com.apple.quarantine "$DEST"
+fi
 
 echo "Ejecting DMG..."
 hdiutil detach "$SCRIPT_DIR" -quiet 2>/dev/null || true
