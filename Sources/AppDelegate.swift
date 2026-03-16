@@ -90,12 +90,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlay.show()
 
         if settings.muteSystemAudio { SystemAudioController.setMuted(true) }
-        do {
-            try audioCapture.startRecording()
-        } catch {
-            print("[dictate] Failed to start recording: \(error)")
-            overlay.state.phase = .idle
-            overlay.hide()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await self.audioCapture.startRecording()
+            } catch {
+                print("[dictate] Failed to start recording: \(error)")
+                self.overlay.state.phase = .idle
+                self.overlay.hide()
+            }
         }
     }
 

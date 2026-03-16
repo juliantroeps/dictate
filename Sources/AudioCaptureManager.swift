@@ -3,9 +3,17 @@ import AVFoundation
 final class AudioCaptureManager: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private var converter: AVAudioConverter?
+    private let targetFormat = AVAudioFormat(
+        commonFormat: .pcmFormatFloat32,
+        sampleRate: 16_000,
+        channels: 1,
+        interleaved: false
+    )!
     private var buffer: [Float] = []
     private let bufferLock = NSLock()
     private var isRecording = false
+    private var isSettling = false
+    private var configChangeTimer: DispatchWorkItem?
 
     var onAudioLevel: ((Float) -> Void)?
     var onRecordingInterrupted: (() -> Void)?
@@ -19,38 +27,50 @@ final class AudioCaptureManager: @unchecked Sendable {
         }
     }
 
-    func startRecording() throws {
+    func startRecording() async throws {
         guard !isRecording else { return }
 
-        let inputNode = engine.inputNode
-        let hwFormat = inputNode.outputFormat(forBus: 0)
+        bufferLock.withLock { buffer.removeAll(keepingCapacity: true) }
 
-        guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
-            throw AudioCaptureError.noInputDevice
+        var lastError: Error = AudioCaptureError.noInputDevice
+        for attempt in 1...5 {
+            if isSettling {
+                print("[dictate] Audio settling, waiting before attempt \(attempt)")
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+
+            let inputNode = engine.inputNode
+            let hwFormat = inputNode.outputFormat(forBus: 0)
+
+            guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
+                throw AudioCaptureError.noInputDevice
+            }
+
+            // Pass nil so AVAudioEngine uses the native hardware format at install time.
+            // Avoids the "Input HW format and tap format not matching" crash when the
+            // format changes between our outputFormat() read and installTap().
+            // Converter is created lazily in processAudioBuffer from the actual buffer format.
+            converter = nil
+            inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) {
+                [weak self] pcmBuffer, _ in
+                self?.processAudioBuffer(pcmBuffer)
+            }
+
+            engine.prepare()
+            do {
+                try engine.start()
+                isRecording = true
+                print("[dictate] Recording started (attempt \(attempt))")
+                return
+            } catch {
+                lastError = error
+                engine.inputNode.removeTap(onBus: 0)
+                if attempt < 5 {
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+            }
         }
-
-        let targetFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: 16_000,
-            channels: 1,
-            interleaved: false
-        )!
-
-        converter = AVAudioConverter(from: hwFormat, to: targetFormat)
-
-        bufferLock.lock()
-        buffer.removeAll(keepingCapacity: true)
-        bufferLock.unlock()
-
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: hwFormat) {
-            [weak self] pcmBuffer, _ in
-            self?.processAudioBuffer(pcmBuffer)
-        }
-
-        engine.prepare()
-        try engine.start()
-        isRecording = true
-        print("[dictate] Recording started")
+        throw lastError
     }
 
     func stopRecording() -> [Float] {
@@ -71,6 +91,9 @@ final class AudioCaptureManager: @unchecked Sendable {
     }
 
     private func processAudioBuffer(_ inputBuffer: AVAudioPCMBuffer) {
+        if converter == nil || converter!.inputFormat != inputBuffer.format {
+            converter = AVAudioConverter(from: inputBuffer.format, to: targetFormat)
+        }
         guard let converter else { return }
 
         let ratio = 16_000.0 / inputBuffer.format.sampleRate
@@ -117,13 +140,19 @@ final class AudioCaptureManager: @unchecked Sendable {
     }
 
     private func handleConfigChange() {
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        converter = nil
         if isRecording {
             print("[dictate] Audio config changed during recording")
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
             isRecording = false
             onRecordingInterrupted?()
         }
+        isSettling = true
+        configChangeTimer?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.isSettling = false }
+        configChangeTimer = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 }
 
