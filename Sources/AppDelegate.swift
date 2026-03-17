@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var permissionTimer: Timer?
     private var keyDownTime: DispatchTime?
     private var transcriptionTask: Task<Void, Never>?
+    private var recordingStartTask: Task<Void, Never>?
     private var engineLoadTask: Task<Void, Never>?
     private var eventMonitor: Any?
 
@@ -90,10 +91,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlay.show()
 
         if settings.muteSystemAudio { SystemAudioController.setMuted(true) }
-        Task { @MainActor [weak self] in
+        recordingStartTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 try await self.audioCapture.startRecording()
+            } catch is CancellationError {
+                // key released before recording started - handleKeyUp already cleans up
             } catch {
                 print("[dictate] Failed to start recording: \(error)")
                 self.overlay.state.phase = .idle
@@ -103,6 +106,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleKeyUp() {
+        recordingStartTask?.cancel()
+        recordingStartTask = nil
         if settings.muteSystemAudio { SystemAudioController.setMuted(false) }
         let samples = audioCapture.stopRecording()
 

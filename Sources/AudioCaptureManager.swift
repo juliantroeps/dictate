@@ -11,6 +11,7 @@ final class AudioCaptureManager: @unchecked Sendable {
     )!
     private var buffer: [Float] = []
     private let bufferLock = NSLock()
+    private let converterLock = NSLock()
     private var isRecording = false
     private var isSettling = false
     private var configChangeTimer: DispatchWorkItem?
@@ -21,7 +22,7 @@ final class AudioCaptureManager: @unchecked Sendable {
     init() {
         NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
-            object: engine, queue: nil
+            object: engine, queue: .main
         ) { [weak self] _ in
             self?.handleConfigChange()
         }
@@ -36,7 +37,7 @@ final class AudioCaptureManager: @unchecked Sendable {
         for attempt in 1...5 {
             if isSettling {
                 print("[dictate] Audio settling, waiting before attempt \(attempt)")
-                try? await Task.sleep(for: .milliseconds(500))
+                try await Task.sleep(for: .milliseconds(500))
             }
 
             let inputNode = engine.inputNode
@@ -50,7 +51,7 @@ final class AudioCaptureManager: @unchecked Sendable {
             // Avoids the "Input HW format and tap format not matching" crash when the
             // format changes between our outputFormat() read and installTap().
             // Converter is created lazily in processAudioBuffer from the actual buffer format.
-            converter = nil
+            converterLock.withLock { converter = nil }
             inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) {
                 [weak self] pcmBuffer, _ in
                 self?.processAudioBuffer(pcmBuffer)
@@ -66,7 +67,7 @@ final class AudioCaptureManager: @unchecked Sendable {
                 lastError = error
                 engine.inputNode.removeTap(onBus: 0)
                 if attempt < 5 {
-                    try? await Task.sleep(for: .milliseconds(500))
+                    try await Task.sleep(for: .milliseconds(500))
                 }
             }
         }
@@ -91,8 +92,11 @@ final class AudioCaptureManager: @unchecked Sendable {
     }
 
     private func processAudioBuffer(_ inputBuffer: AVAudioPCMBuffer) {
-        if converter == nil || converter!.inputFormat != inputBuffer.format {
-            converter = AVAudioConverter(from: inputBuffer.format, to: targetFormat)
+        let converter: AVAudioConverter? = converterLock.withLock {
+            if self.converter == nil || self.converter!.inputFormat != inputBuffer.format {
+                self.converter = AVAudioConverter(from: inputBuffer.format, to: targetFormat)
+            }
+            return self.converter
         }
         guard let converter else { return }
 
@@ -142,7 +146,7 @@ final class AudioCaptureManager: @unchecked Sendable {
     private func handleConfigChange() {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
-        converter = nil
+        converterLock.withLock { converter = nil }
         if isRecording {
             print("[dictate] Audio config changed during recording")
             isRecording = false
