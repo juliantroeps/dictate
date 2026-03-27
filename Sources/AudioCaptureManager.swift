@@ -19,6 +19,7 @@ final class AudioCaptureManager: @unchecked Sendable {
     private var configChangeTimer: DispatchWorkItem?
     private var primeStopTimer: DispatchWorkItem?
     private var originalDefaultInput: AudioDeviceID?
+    private var redirectedInput: AudioDeviceID?
 
     var onAudioLevel: ((Float) -> Void)?
     var onRecordingInterrupted: (() -> Void)?
@@ -29,10 +30,7 @@ final class AudioCaptureManager: @unchecked Sendable {
     }
 
     func cleanup() {
-        if let original = originalDefaultInput {
-            originalDefaultInput = nil
-            setSystemDefaultInputDevice(original)
-        }
+        restoreOriginalDefaultInputIfNeeded()
         installDefaultInputListener()
     }
 
@@ -110,11 +108,12 @@ final class AudioCaptureManager: @unchecked Sendable {
         }
 
         // Redirect system default input to non-BT device to keep BT headphones in A2DP.
-        if originalDefaultInput == nil {
-            if let current = getSystemDefaultInputDevice(), current != nonBTDeviceID {
-                if setSystemDefaultInputDevice(nonBTDeviceID) {
-                    originalDefaultInput = current
-                }
+        redirectSystemDefaultInputIfNeeded(to: nonBTDeviceID)
+
+        var didStartRecording = false
+        defer {
+            if !didStartRecording {
+                restoreOriginalDefaultInputIfNeeded()
             }
         }
 
@@ -124,6 +123,7 @@ final class AudioCaptureManager: @unchecked Sendable {
             engine.inputNode.removeTap(onBus: 0)
             installRecordingTap()
             isRecording = true
+            didStartRecording = true
             print("[dictate] Recording started (primed)")
             return
         }
@@ -145,6 +145,7 @@ final class AudioCaptureManager: @unchecked Sendable {
             do {
                 try engine.start()
                 isRecording = true
+                didStartRecording = true
                 print("[dictate] Recording started (attempt \(attempt))")
                 return
             } catch {
@@ -174,10 +175,7 @@ final class AudioCaptureManager: @unchecked Sendable {
         engine.stop()
 
         // Restore original default input now that recording is done.
-        if let original = originalDefaultInput {
-            originalDefaultInput = nil
-            setSystemDefaultInputDevice(original)
-        }
+        restoreOriginalDefaultInputIfNeeded()
 
         bufferLock.lock()
         let captured = buffer
@@ -249,10 +247,6 @@ final class AudioCaptureManager: @unchecked Sendable {
             isRecording = false
             onRecordingInterrupted?()
         }
-        // Clear redirect state - don't restore here, we can't distinguish our own redirect's
-        // config change from external events. stopRecording() restores after normal recording;
-        // cleanup() restores on app quit.
-        originalDefaultInput = nil
         // Recreate engine completely - fresh state, fresh format, no stale device info.
         recreateEngine()
         converterLock.withLock { converter = nil }
@@ -281,6 +275,29 @@ final class AudioCaptureManager: @unchecked Sendable {
         ) { [weak self] _ in
             self?.handleConfigChange()
         }
+    }
+
+    private func redirectSystemDefaultInputIfNeeded(to deviceID: AudioDeviceID) {
+        if redirectedInput == deviceID { return }
+        guard let current = getSystemDefaultInputDevice(), current != deviceID else { return }
+        if originalDefaultInput == nil {
+            originalDefaultInput = current
+        }
+        if setSystemDefaultInputDevice(deviceID) {
+            redirectedInput = deviceID
+        } else if redirectedInput == nil {
+            originalDefaultInput = nil
+        }
+    }
+
+    private func restoreOriginalDefaultInputIfNeeded() {
+        guard let original = originalDefaultInput else {
+            redirectedInput = nil
+            return
+        }
+        originalDefaultInput = nil
+        redirectedInput = nil
+        setSystemDefaultInputDevice(original)
     }
 
     // MARK: - Device helpers
