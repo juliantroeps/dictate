@@ -22,6 +22,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         super.init()
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        audioCapture.cleanup()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
