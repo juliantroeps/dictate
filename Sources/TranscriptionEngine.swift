@@ -29,6 +29,10 @@ final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
         guard whisperKit == nil else { return }
         print("[dictate] Loading WhisperKit model: \(model)")
         let config = WhisperKitConfig(model: model, load: true)
+        if let cached = cachedModelFolder() {
+            print("[dictate] Using cached model at \(cached)")
+            config.modelFolder = cached
+        }
         let wk = try await WhisperKit(config)
         whisperKit = wk
 
@@ -51,6 +55,16 @@ final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
     func unload() {
         whisperKit = nil
         promptTokens = nil
+    }
+
+    private func cachedModelFolder() -> String? {
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
+        let path = docs.appendingPathComponent("huggingface/models/argmaxinc/whisperkit-coreml/\(model)")
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path.path, isDirectory: &isDir), isDir.boolValue else { return nil }
+        let contents = (try? FileManager.default.contentsOfDirectory(atPath: path.path)) ?? []
+        guard contents.contains(where: { $0.hasSuffix(".mlmodelc") }) else { return nil }
+        return path.path
     }
 
     func transcribe(audioSamples: [Float]) async throws -> String {
