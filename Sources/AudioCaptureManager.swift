@@ -47,8 +47,9 @@ final class AudioCaptureManager: @unchecked Sendable {
         // format state. The retry loop waits for isSettling to clear before attempting start.
         if originalDefaultInput == nil {
             if let current = getSystemDefaultInputDevice(), current != nonBTDeviceID {
-                originalDefaultInput = current
-                setSystemDefaultInputDevice(nonBTDeviceID)
+                if setSystemDefaultInputDevice(nonBTDeviceID) {
+                    originalDefaultInput = current
+                }
             }
         }
 
@@ -85,12 +86,19 @@ final class AudioCaptureManager: @unchecked Sendable {
         throw lastError
     }
 
+    @MainActor
     func stopRecording() -> [Float] {
         guard isRecording else { return [] }
         isRecording = false
 
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+
+        // Restore original default input now that recording is done.
+        if let original = originalDefaultInput {
+            originalDefaultInput = nil
+            setSystemDefaultInputDevice(original)
+        }
 
         bufferLock.lock()
         let captured = buffer
@@ -164,11 +172,13 @@ final class AudioCaptureManager: @unchecked Sendable {
             isRecording = false
             onRecordingInterrupted?()
         }
+        // Clear redirect state - don't restore here, we can't distinguish our own redirect's
+        // config change from external events. stopRecording() restores after normal recording;
+        // cleanup() restores on app quit.
+        originalDefaultInput = nil
         // Recreate engine completely - fresh state, fresh format, no stale device info.
-        // Also clear the system default tracking so startRecording re-evaluates on next call.
         recreateEngine()
         converterLock.withLock { converter = nil }
-        originalDefaultInput = nil
         isSettling = true
         configChangeTimer?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.isSettling = false }
@@ -207,14 +217,17 @@ final class AudioCaptureManager: @unchecked Sendable {
         return deviceID
     }
 
-    private func setSystemDefaultInputDevice(_ deviceID: AudioDeviceID) {
+    @discardableResult
+    private func setSystemDefaultInputDevice(_ deviceID: AudioDeviceID) -> Bool {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultInputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
         var id = deviceID
-        AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, UInt32(MemoryLayout<AudioDeviceID>.size), &id)
+        let status = AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, UInt32(MemoryLayout<AudioDeviceID>.size), &id)
+        if status != noErr { print("[dictate] Failed to set default input device: \(status)") }
+        return status == noErr
     }
 
     private func findNonBluetoothInputDevice() -> AudioDeviceID? {
@@ -233,7 +246,7 @@ final class AudioCaptureManager: @unchecked Sendable {
         var externalNonBT: AudioDeviceID?
         var builtIn: AudioDeviceID?
 
-        for id in ids {
+        for id in ids.sorted() {
             guard hasInputChannels(id), !isBluetoothDevice(id) else { continue }
             if isExternalNonBT(id) {
                 if externalNonBT == nil { externalNonBT = id }
@@ -256,10 +269,11 @@ final class AudioCaptureManager: @unchecked Sendable {
         )
         var size: UInt32 = 0
         guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size) == noErr, size > 0 else { return 0 }
-        let ptr = UnsafeMutablePointer<AudioBufferList>.allocate(capacity: Int(size))
+        let ptr = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
         defer { ptr.deallocate() }
-        guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, ptr) == noErr else { return 0 }
-        return UnsafeMutableAudioBufferListPointer(ptr).reduce(0) { $0 + $1.mNumberChannels }
+        let ablPtr = ptr.assumingMemoryBound(to: AudioBufferList.self)
+        guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, ablPtr) == noErr else { return 0 }
+        return UnsafeMutableAudioBufferListPointer(ablPtr).reduce(0) { $0 + $1.mNumberChannels }
     }
 
     private func transportType(_ deviceID: AudioDeviceID) -> UInt32 {

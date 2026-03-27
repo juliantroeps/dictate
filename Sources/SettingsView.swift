@@ -163,7 +163,7 @@ struct SettingsView: View {
             mElement: kAudioObjectPropertyElementMain
         )
         var nameRef: Unmanaged<CFString>? = nil
-        var nameSize = UInt32(MemoryLayout<CFString>.size)
+        var nameSize = UInt32(MemoryLayout<Unmanaged<CFString>>.size)
         guard AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, &nameRef) == noErr,
               let name = nameRef?.takeRetainedValue() else {
             return "Unknown"
