@@ -2,7 +2,7 @@ import AVFoundation
 import CoreAudio
 
 final class AudioCaptureManager: @unchecked Sendable {
-    private let engine = AVAudioEngine()
+    private var engine = AVAudioEngine()
     private var converter: AVAudioConverter?
     private let targetFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32,
@@ -18,17 +18,20 @@ final class AudioCaptureManager: @unchecked Sendable {
     private var isPriming = false
     private var configChangeTimer: DispatchWorkItem?
     private var primeStopTimer: DispatchWorkItem?
+    private var originalDefaultInput: AudioDeviceID?
 
     var onAudioLevel: ((Float) -> Void)?
     var onRecordingInterrupted: (() -> Void)?
     var onDeviceChanged: (() -> Void)?
 
     init() {
-        NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange,
-            object: engine, queue: .main
-        ) { [weak self] _ in
-            self?.handleConfigChange()
+        registerEngineObserver()
+    }
+
+    func cleanup() {
+        if let original = originalDefaultInput {
+            originalDefaultInput = nil
+            setSystemDefaultInputDevice(original)
         }
         installDefaultInputListener()
     }
@@ -94,12 +97,25 @@ final class AudioCaptureManager: @unchecked Sendable {
         DispatchQueue.main.asyncAfter(deadline: .now() + 5.0, execute: work)
     }
 
+    @MainActor
     func startRecording() async throws {
         guard !isRecording else { return }
 
         primeStopTimer?.cancel()
         primeStopTimer = nil
         bufferLock.withLock { buffer.removeAll(keepingCapacity: true) }
+
+        guard let nonBTDeviceID = findNonBluetoothInputDevice() else {
+            throw AudioCaptureError.noInputDevice
+        }
+
+        // Redirect system default input to non-BT device to keep BT headphones in A2DP.
+        if originalDefaultInput == nil {
+            if let current = getSystemDefaultInputDevice(), current != nonBTDeviceID {
+                originalDefaultInput = current
+                setSystemDefaultInputDevice(nonBTDeviceID)
+            }
+        }
 
         if isPriming {
             // Engine already running - swap prime tap for recording tap
@@ -123,10 +139,6 @@ final class AudioCaptureManager: @unchecked Sendable {
                 throw AudioCaptureError.noInputDevice
             }
 
-            // Pass nil so AVAudioEngine uses the native hardware format at install time.
-            // Avoids the "Input HW format and tap format not matching" crash when the
-            // format changes between our outputFormat() read and installTap().
-            // Converter is created lazily in processAudioBuffer from the actual buffer format.
             installRecordingTap()
             engine.prepare()
             do {
@@ -213,8 +225,7 @@ final class AudioCaptureManager: @unchecked Sendable {
         var sumOfSquares: Float = 0
         for sample in samples { sumOfSquares += sample * sample }
         let rms = sqrt(sumOfSquares / max(Float(samples.count), 1))
-        let normalizedLevel = min(rms * 12, 1.0)
-        onAudioLevel?(normalizedLevel)
+        onAudioLevel?(min(rms * 12, 1.0))
 
         bufferLock.lock()
         buffer.append(contentsOf: samples)
@@ -225,15 +236,16 @@ final class AudioCaptureManager: @unchecked Sendable {
         primeStopTimer?.cancel()
         primeStopTimer = nil
         isPriming = false
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        engine.reset()
-        converterLock.withLock { converter = nil }
         if isRecording {
-            print("[dictate] Audio config changed during recording")
+            engine.inputNode.removeTap(onBus: 0)
             isRecording = false
             onRecordingInterrupted?()
         }
+        // Recreate engine completely - fresh state, fresh format, no stale device info.
+        // Also clear the system default tracking so startRecording re-evaluates on next call.
+        recreateEngine()
+        converterLock.withLock { converter = nil }
+        originalDefaultInput = nil
         isSettling = true
         configChangeTimer?.cancel()
         let work = DispatchWorkItem { [weak self] in
@@ -242,6 +254,123 @@ final class AudioCaptureManager: @unchecked Sendable {
         }
         configChangeTimer = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    private func recreateEngine() {
+        NotificationCenter.default.removeObserver(
+            self, name: .AVAudioEngineConfigurationChange, object: engine
+        )
+        engine = AVAudioEngine()
+        registerEngineObserver()
+    }
+
+    private func registerEngineObserver() {
+        NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine, queue: .main
+        ) { [weak self] _ in
+            self?.handleConfigChange()
+        }
+    }
+
+    // MARK: - Device helpers
+
+    private func getSystemDefaultInputDevice() -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceID: AudioDeviceID = 0
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID) == noErr else { return nil }
+        return deviceID
+    }
+
+    private func setSystemDefaultInputDevice(_ deviceID: AudioDeviceID) {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var id = deviceID
+        AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, UInt32(MemoryLayout<AudioDeviceID>.size), &id)
+    }
+
+    private func findNonBluetoothInputDevice() -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size) == noErr else { return nil }
+
+        let count = Int(size) / MemoryLayout<AudioDeviceID>.size
+        var ids = [AudioDeviceID](repeating: 0, count: count)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &ids) == noErr else { return nil }
+
+        var externalNonBT: AudioDeviceID?
+        var builtIn: AudioDeviceID?
+
+        for id in ids {
+            guard hasInputChannels(id), !isBluetoothDevice(id) else { continue }
+            if isExternalNonBT(id) {
+                if externalNonBT == nil { externalNonBT = id }
+            } else if isBuiltIn(id) {
+                if builtIn == nil { builtIn = id }
+            }
+        }
+        return externalNonBT ?? builtIn
+    }
+
+    private func hasInputChannels(_ deviceID: AudioDeviceID) -> Bool {
+        inputChannelCount(deviceID) > 0
+    }
+
+    private func inputChannelCount(_ deviceID: AudioDeviceID) -> UInt32 {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamConfiguration,
+            mScope: kAudioDevicePropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size) == noErr, size > 0 else { return 0 }
+        let ptr = UnsafeMutablePointer<AudioBufferList>.allocate(capacity: Int(size))
+        defer { ptr.deallocate() }
+        guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, ptr) == noErr else { return 0 }
+        return UnsafeMutableAudioBufferListPointer(ptr).reduce(0) { $0 + $1.mNumberChannels }
+    }
+
+    private func transportType(_ deviceID: AudioDeviceID) -> UInt32 {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var transport: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &transport)
+        return transport
+    }
+
+    private func isBluetoothDevice(_ deviceID: AudioDeviceID) -> Bool {
+        let t = transportType(deviceID)
+        return t == kAudioDeviceTransportTypeBluetooth || t == kAudioDeviceTransportTypeBluetoothLE
+    }
+
+    private func isBuiltIn(_ deviceID: AudioDeviceID) -> Bool {
+        transportType(deviceID) == kAudioDeviceTransportTypeBuiltIn
+    }
+
+    private func isExternalNonBT(_ deviceID: AudioDeviceID) -> Bool {
+        let external: Set<UInt32> = [
+            kAudioDeviceTransportTypeUSB,
+            kAudioDeviceTransportTypeThunderbolt,
+            kAudioDeviceTransportTypeFireWire,
+            kAudioDeviceTransportTypePCI
+        ]
+        return external.contains(transportType(deviceID))
     }
 }
 
