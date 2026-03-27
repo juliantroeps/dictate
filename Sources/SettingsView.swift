@@ -51,6 +51,23 @@ struct SettingsView: View {
 
             Divider()
 
+            // -- Devices --
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Devices").font(.subheadline).foregroundStyle(.secondary)
+
+                HStack {
+                    Text("Input").font(.caption).foregroundStyle(.secondary).frame(width: 40, alignment: .leading)
+                    Text(inputDeviceName).font(.caption)
+                }
+                HStack {
+                    Text("Output").font(.caption).foregroundStyle(.secondary).frame(width: 40, alignment: .leading)
+                    Text(outputDeviceName).font(.caption)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Divider()
+
             // -- Behavior --
             VStack(alignment: .leading, spacing: 6) {
                 Text("Behavior").font(.subheadline).foregroundStyle(.secondary)
@@ -62,24 +79,6 @@ struct SettingsView: View {
                 }
 
                 Toggle("Mute system audio while recording", isOn: Bindable(settings).muteSystemAudio)
-
-                if !inputDeviceName.isEmpty {
-                    HStack {
-                        Text("Input").foregroundStyle(.secondary)
-                        Spacer()
-                        Text(inputDeviceName).foregroundStyle(.secondary)
-                    }
-                    .font(.caption)
-                }
-
-                if !outputDeviceName.isEmpty {
-                    HStack {
-                        Text("Output").foregroundStyle(.secondary)
-                        Spacer()
-                        Text(outputDeviceName).foregroundStyle(.secondary)
-                    }
-                    .font(.caption)
-                }
             }
 
             Divider()
