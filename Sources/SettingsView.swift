@@ -1,9 +1,12 @@
+import CoreAudio
 import SwiftUI
 
 struct SettingsView: View {
     private let settings = Settings.shared
     @State private var accessibilityGranted = AccessibilityPermission.isGranted
     @State private var microphoneGranted = MicrophonePermission.isGranted
+    @State private var inputDeviceName = SettingsView.defaultDeviceName(input: true)
+    @State private var outputDeviceName = SettingsView.defaultDeviceName(input: false)
 
     private let models: [(id: String, label: String, memory: String)] = [
         ("openai_whisper-tiny.en", "tiny.en", "~75 MB"),
@@ -46,6 +49,23 @@ struct SettingsView: View {
                         .font(.caption).foregroundColor(.red)
                 }
             }
+
+            Divider()
+
+            // -- Devices --
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Devices").font(.subheadline).foregroundStyle(.secondary)
+
+                HStack {
+                    Text("Input").font(.caption).foregroundStyle(.secondary).frame(width: 40, alignment: .leading)
+                    Text(inputDeviceName).font(.caption)
+                }
+                HStack {
+                    Text("Output").font(.caption).foregroundStyle(.secondary).frame(width: 40, alignment: .leading)
+                    Text(outputDeviceName).font(.caption)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Divider()
 
@@ -121,6 +141,33 @@ struct SettingsView: View {
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
             accessibilityGranted = AccessibilityPermission.isGranted
             microphoneGranted = MicrophonePermission.isGranted
+            inputDeviceName = SettingsView.defaultDeviceName(input: true)
+            outputDeviceName = SettingsView.defaultDeviceName(input: false)
         }
+    }
+
+    private static func defaultDeviceName(input: Bool) -> String {
+        var address = AudioObjectPropertyAddress(
+            mSelector: input ? kAudioHardwarePropertyDefaultInputDevice : kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceID: AudioDeviceID = 0
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID) == noErr, deviceID != 0 else {
+            return "Unknown"
+        }
+        var nameAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioObjectPropertyName,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var nameRef: Unmanaged<CFString>? = nil
+        var nameSize = UInt32(MemoryLayout<CFString>.size)
+        guard AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, &nameRef) == noErr,
+              let name = nameRef?.takeRetainedValue() else {
+            return "Unknown"
+        }
+        return name as String
     }
 }
