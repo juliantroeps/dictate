@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 
 final class AudioCaptureManager: @unchecked Sendable {
     private let engine = AVAudioEngine()
@@ -14,10 +15,13 @@ final class AudioCaptureManager: @unchecked Sendable {
     private let converterLock = NSLock()
     private var isRecording = false
     private var isSettling = false
+    private var isPriming = false
     private var configChangeTimer: DispatchWorkItem?
+    private var primeStopTimer: DispatchWorkItem?
 
     var onAudioLevel: ((Float) -> Void)?
     var onRecordingInterrupted: (() -> Void)?
+    var onDeviceChanged: (() -> Void)?
 
     init() {
         NotificationCenter.default.addObserver(
@@ -26,12 +30,84 @@ final class AudioCaptureManager: @unchecked Sendable {
         ) { [weak self] _ in
             self?.handleConfigChange()
         }
+        installDefaultInputListener()
+    }
+
+    deinit {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        AudioObjectRemovePropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject), &addr, nil, defaultInputListenerBlock
+        )
+    }
+
+    private lazy var defaultInputListenerBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+        guard let self else { return }
+        // Only handle idle device changes; AVAudioEngineConfigurationChange covers the recording case.
+        guard !self.isRecording else { return }
+        self.handleConfigChange()
+    }
+
+    private func installDefaultInputListener() {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject), &addr, nil, defaultInputListenerBlock
+        )
+    }
+
+    func primeInput() {
+        guard !isRecording, !isSettling else { return }
+        if isPriming {
+            // Already priming - reset the stop timer to keep it alive longer
+            primeStopTimer?.cancel()
+            schedulePrimeStop()
+            return
+        }
+        let inputNode = engine.inputNode
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { _, _ in }
+        engine.prepare()
+        guard (try? engine.start()) != nil else {
+            inputNode.removeTap(onBus: 0)
+            return
+        }
+        isPriming = true
+        schedulePrimeStop()
+    }
+
+    private func schedulePrimeStop() {
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.isPriming, !self.isRecording else { return }
+            self.engine.inputNode.removeTap(onBus: 0)
+            self.engine.stop()
+            self.isPriming = false
+        }
+        primeStopTimer = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0, execute: work)
     }
 
     func startRecording() async throws {
         guard !isRecording else { return }
 
+        primeStopTimer?.cancel()
+        primeStopTimer = nil
         bufferLock.withLock { buffer.removeAll(keepingCapacity: true) }
+
+        if isPriming {
+            // Engine already running - swap prime tap for recording tap
+            isPriming = false
+            engine.inputNode.removeTap(onBus: 0)
+            installRecordingTap()
+            isRecording = true
+            print("[dictate] Recording started (primed)")
+            return
+        }
 
         var lastError: Error = AudioCaptureError.noInputDevice
         for attempt in 1...5 {
@@ -40,9 +116,7 @@ final class AudioCaptureManager: @unchecked Sendable {
                 try await Task.sleep(for: .milliseconds(500))
             }
 
-            let inputNode = engine.inputNode
-            let hwFormat = inputNode.outputFormat(forBus: 0)
-
+            let hwFormat = engine.inputNode.outputFormat(forBus: 0)
             guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
                 throw AudioCaptureError.noInputDevice
             }
@@ -51,12 +125,7 @@ final class AudioCaptureManager: @unchecked Sendable {
             // Avoids the "Input HW format and tap format not matching" crash when the
             // format changes between our outputFormat() read and installTap().
             // Converter is created lazily in processAudioBuffer from the actual buffer format.
-            converterLock.withLock { converter = nil }
-            inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) {
-                [weak self] pcmBuffer, _ in
-                self?.processAudioBuffer(pcmBuffer)
-            }
-
+            installRecordingTap()
             engine.prepare()
             do {
                 try engine.start()
@@ -72,6 +141,13 @@ final class AudioCaptureManager: @unchecked Sendable {
             }
         }
         throw lastError
+    }
+
+    private func installRecordingTap() {
+        converterLock.withLock { converter = nil }
+        engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] pcmBuffer, _ in
+            self?.processAudioBuffer(pcmBuffer)
+        }
     }
 
     func stopRecording() -> [Float] {
@@ -144,8 +220,12 @@ final class AudioCaptureManager: @unchecked Sendable {
     }
 
     private func handleConfigChange() {
+        primeStopTimer?.cancel()
+        primeStopTimer = nil
+        isPriming = false
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        engine.reset()
         converterLock.withLock { converter = nil }
         if isRecording {
             print("[dictate] Audio config changed during recording")
@@ -154,7 +234,10 @@ final class AudioCaptureManager: @unchecked Sendable {
         }
         isSettling = true
         configChangeTimer?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.isSettling = false }
+        let work = DispatchWorkItem { [weak self] in
+            self?.isSettling = false
+            self?.onDeviceChanged?()
+        }
         configChangeTimer = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }

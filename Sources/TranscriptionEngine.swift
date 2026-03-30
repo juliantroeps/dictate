@@ -79,7 +79,9 @@ final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
         }
 
         let results = try await wk.transcribe(audioArray: audioSamples, decodeOptions: options)
-        return results.first?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let text = results.first?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        print("[dictate] Transcription result: \(text.isEmpty ? "<empty>" : text)")
+        return text
     }
 }
 

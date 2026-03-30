@@ -16,6 +16,8 @@ struct RecordingOverlayView: View {
                 processingCapsule
             case .error(let message):
                 errorCapsule(message)
+            case .info(let message):
+                infoCapsule(message)
             }
         }
         .fixedSize()
@@ -56,6 +58,22 @@ struct RecordingOverlayView: View {
             Text("Processing")
                 .foregroundStyle(.white)
                 .font(.system(size: 13, weight: .medium))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: Capsule())
+        .transition(.opacity)
+    }
+
+    private func infoCapsule(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "mic.fill")
+                .foregroundStyle(.white)
+                .font(.system(size: 14, weight: .medium))
+            Text(message)
+                .foregroundStyle(.white)
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(1)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)

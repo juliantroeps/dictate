@@ -48,6 +48,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        audioCapture.onDeviceChanged = { [weak self] in
+            DispatchQueue.main.async {
+                self?.handleDeviceChanged()
+            }
+        }
+
         audioCapture.onAudioLevel = { [weak self] level in
             DispatchQueue.main.async {
                 self?.overlay.state.audioLevel = level
@@ -190,7 +196,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         keyDownTime = nil
         transcriptionTask?.cancel()
         transcriptionTask = nil
-        overlay.showError("Audio device disconnected")
+    }
+
+    private func handleDeviceChanged() {
+        let name = SystemAudioController.defaultInputDeviceName ?? "Unknown mic"
+        overlay.showInfo(name, duration: 2.0)
     }
 
     private func prepareEngine(attempts: Int = 3) {

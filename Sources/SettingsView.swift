@@ -4,6 +4,8 @@ struct SettingsView: View {
     private let settings = Settings.shared
     @State private var accessibilityGranted = AccessibilityPermission.isGranted
     @State private var microphoneGranted = MicrophonePermission.isGranted
+    @State private var inputDeviceName = SystemAudioController.defaultInputDeviceName ?? ""
+    @State private var outputDeviceName = SystemAudioController.defaultOutputDeviceName ?? ""
 
     private let models: [(id: String, label: String, memory: String)] = [
         ("openai_whisper-tiny.en", "tiny.en", "~75 MB"),
@@ -60,6 +62,24 @@ struct SettingsView: View {
                 }
 
                 Toggle("Mute system audio while recording", isOn: Bindable(settings).muteSystemAudio)
+
+                if !inputDeviceName.isEmpty {
+                    HStack {
+                        Text("Input").foregroundStyle(.secondary)
+                        Spacer()
+                        Text(inputDeviceName).foregroundStyle(.secondary)
+                    }
+                    .font(.caption)
+                }
+
+                if !outputDeviceName.isEmpty {
+                    HStack {
+                        Text("Output").foregroundStyle(.secondary)
+                        Spacer()
+                        Text(outputDeviceName).foregroundStyle(.secondary)
+                    }
+                    .font(.caption)
+                }
             }
 
             Divider()
@@ -121,6 +141,8 @@ struct SettingsView: View {
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
             accessibilityGranted = AccessibilityPermission.isGranted
             microphoneGranted = MicrophonePermission.isGranted
+            inputDeviceName = SystemAudioController.defaultInputDeviceName ?? ""
+            outputDeviceName = SystemAudioController.defaultOutputDeviceName ?? ""
         }
     }
 }
