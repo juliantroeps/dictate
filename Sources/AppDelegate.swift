@@ -199,6 +199,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleDeviceChanged() {
+        // Don't show device notification during recording/processing
+        guard case .idle = overlay.state.phase else { return }
         let name = SystemAudioController.defaultInputDeviceName ?? "Unknown mic"
         overlay.showInfo(name, duration: 2.0)
     }
