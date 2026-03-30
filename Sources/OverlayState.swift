@@ -6,6 +6,7 @@ enum RecordingPhase: Equatable {
     case recording
     case processing
     case error(String)
+    case info(String)
 }
 
 @Observable

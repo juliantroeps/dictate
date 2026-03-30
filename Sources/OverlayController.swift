@@ -42,6 +42,16 @@ final class OverlayController {
         }
     }
 
+    func showInfo(_ message: String, duration: TimeInterval = 2.0) {
+        state.phase = .info(message)
+        show()
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+            guard case .info = self?.state.phase else { return }
+            self?.state.phase = .idle
+            self?.hide()
+        }
+    }
+
     func hide() {
         guard let window else { return }
 
