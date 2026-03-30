@@ -45,10 +45,12 @@ final class AudioCaptureManager: @unchecked Sendable {
     }
 
     private lazy var defaultInputListenerBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-        guard let self else { return }
-        // Only handle idle device changes; AVAudioEngineConfigurationChange covers the recording case.
-        guard !self.isRecording else { return }
-        self.handleConfigChange()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            // Only handle idle device changes; AVAudioEngineConfigurationChange covers the recording case.
+            guard !self.isRecording else { return }
+            self.handleConfigChange()
+        }
     }
 
     private func installDefaultInputListener() {
