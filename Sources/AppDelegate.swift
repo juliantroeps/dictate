@@ -60,6 +60,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Apply saved device selection and observe changes
+        audioCapture.selectDevice(settings.selectedInputDeviceID)
+        observeDeviceSelection()
+
         keyListener.onKeyDown = { [weak self] in
             self?.handleKeyDown()
         }
@@ -187,6 +191,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 self?.reloadEngine()
                 self?.observeModelChange()
+            }
+        }
+    }
+
+    private func observeDeviceSelection() {
+        withObservationTracking {
+            _ = settings.selectedInputDeviceID
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                self?.audioCapture.selectDevice(self?.settings.selectedInputDeviceID)
+                self?.observeDeviceSelection()
             }
         }
     }

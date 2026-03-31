@@ -1,3 +1,4 @@
+import CoreAudio
 import Foundation
 import ServiceManagement
 
@@ -18,6 +19,16 @@ final class Settings {
 
     var muteSystemAudio: Bool {
         didSet { UserDefaults.standard.set(muteSystemAudio, forKey: "muteSystemAudio") }
+    }
+
+    var selectedInputDeviceID: AudioDeviceID? {
+        didSet {
+            if let id = selectedInputDeviceID {
+                UserDefaults.standard.set(Int(id), forKey: "selectedInputDeviceID")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "selectedInputDeviceID")
+            }
+        }
     }
 
     var engineState: EngineState = .loading
@@ -49,6 +60,11 @@ final class Settings {
         self.whisperModel = defaults.string(forKey: "whisperModel") ?? "openai_whisper-tiny.en"
         self.noFocusBehavior = NoFocusBehavior(rawValue: defaults.string(forKey: "noFocusBehavior") ?? "") ?? .clipboard
         self.muteSystemAudio = defaults.bool(forKey: "muteSystemAudio")
+        if let savedID = defaults.object(forKey: "selectedInputDeviceID") as? Int {
+            self.selectedInputDeviceID = AudioDeviceID(savedID)
+        } else {
+            self.selectedInputDeviceID = nil
+        }
     }
 }
 

@@ -1,10 +1,11 @@
+import CoreAudio
 import SwiftUI
 
 struct SettingsView: View {
     private let settings = Settings.shared
     @State private var accessibilityGranted = AccessibilityPermission.isGranted
     @State private var microphoneGranted = MicrophonePermission.isGranted
-    @State private var inputDeviceName = SystemAudioController.defaultInputDeviceName ?? ""
+    @State private var inputDevices: [(id: AudioDeviceID, name: String)] = []
     @State private var outputDeviceName = SystemAudioController.defaultOutputDeviceName ?? ""
 
     private let models: [(id: String, label: String, memory: String)] = [
@@ -63,13 +64,15 @@ struct SettingsView: View {
 
                 Toggle("Mute system audio while recording", isOn: Bindable(settings).muteSystemAudio)
 
-                if !inputDeviceName.isEmpty {
-                    HStack {
-                        Text("Input").foregroundStyle(.secondary)
-                        Spacer()
-                        Text(inputDeviceName).foregroundStyle(.secondary)
+                Picker("Input", selection: Binding(
+                    get: { settings.selectedInputDeviceID },
+                    set: { settings.selectedInputDeviceID = $0 }
+                )) {
+                    let defaultName = SystemAudioController.defaultInputDeviceName ?? "System Default"
+                    Text("\(defaultName) (Default)").tag(AudioDeviceID?.none)
+                    ForEach(inputDevices, id: \.id) { device in
+                        Text(device.name).tag(Optional(device.id))
                     }
-                    .font(.caption)
                 }
 
                 if !outputDeviceName.isEmpty {
@@ -137,11 +140,14 @@ struct SettingsView: View {
         }
         .padding()
         .frame(width: 280)
-        .onAppear { microphoneGranted = MicrophonePermission.isGranted }
+        .onAppear {
+            microphoneGranted = MicrophonePermission.isGranted
+            inputDevices = SystemAudioController.allInputDevices.filter { !SystemAudioController.isDeviceBluetooth($0.id) }
+        }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
             accessibilityGranted = AccessibilityPermission.isGranted
             microphoneGranted = MicrophonePermission.isGranted
-            inputDeviceName = SystemAudioController.defaultInputDeviceName ?? ""
+            inputDevices = SystemAudioController.allInputDevices.filter { !SystemAudioController.isDeviceBluetooth($0.id) }
             outputDeviceName = SystemAudioController.defaultOutputDeviceName ?? ""
         }
     }

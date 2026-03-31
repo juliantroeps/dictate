@@ -1,3 +1,4 @@
+import AudioToolbox
 import AVFoundation
 import CoreAudio
 
@@ -22,6 +23,13 @@ final class AudioCaptureManager: @unchecked Sendable {
     var onAudioLevel: ((Float) -> Void)?
     var onRecordingInterrupted: (() -> Void)?
     var onDeviceChanged: (() -> Void)?
+
+    var selectedDeviceID: AudioDeviceID?
+
+    func selectDevice(_ deviceID: AudioDeviceID?) {
+        selectedDeviceID = deviceID
+        print("[dictate] Device selection set to: \(deviceID.map { String($0) } ?? "system default")")
+    }
 
     init() {
         NotificationCenter.default.addObserver(
@@ -102,13 +110,18 @@ final class AudioCaptureManager: @unchecked Sendable {
         bufferLock.withLock { buffer.removeAll(keepingCapacity: true) }
 
         if isPriming {
-            // Engine already running - swap prime tap for recording tap
             isPriming = false
             engine.inputNode.removeTap(onBus: 0)
-            installRecordingTap()
-            isRecording = true
-            print("[dictate] Recording started (primed)")
-            return
+            if selectedDeviceID == nil {
+                // No device override - reuse running engine
+                installRecordingTap()
+                isRecording = true
+                print("[dictate] Recording started (primed)")
+                return
+            }
+            // Device selected: must stop + reset engine so AUHAL is fully deinitialized
+            engine.stop()
+            engine.reset()
         }
 
         var lastError: Error = AudioCaptureError.noInputDevice
@@ -117,6 +130,9 @@ final class AudioCaptureManager: @unchecked Sendable {
                 print("[dictate] Audio settling, waiting before attempt \(attempt)")
                 try await Task.sleep(for: .milliseconds(500))
             }
+
+            // Apply device BEFORE format query so AUHAL negotiates format with the target device
+            _ = applyDeviceSelection()
 
             let hwFormat = engine.inputNode.outputFormat(forBus: 0)
             guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
@@ -143,6 +159,30 @@ final class AudioCaptureManager: @unchecked Sendable {
             }
         }
         throw lastError
+    }
+
+    private func applyDeviceSelection() -> Bool {
+        guard let targetID = selectedDeviceID else {
+            return true // No selection - use system default
+        }
+        guard let inputUnit = engine.inputNode.audioUnit else {
+            return true // audioUnit not yet available - use system default
+        }
+        var deviceID = targetID
+        let status = AudioUnitSetProperty(
+            inputUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &deviceID,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+        if status != noErr {
+            print("[dictate] Failed to set input device \(targetID): \(status)")
+            return false
+        }
+        print("[dictate] Applied device selection: \(targetID)")
+        return true
     }
 
     private func installRecordingTap() {
