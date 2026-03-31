@@ -1,9 +1,11 @@
-import AudioToolbox
 import AVFoundation
 import CoreAudio
 
 final class AudioCaptureManager: @unchecked Sendable {
-    private let engine = AVAudioEngine()
+    private var engine = AVAudioEngine()
+    private var configChangeObserver: Any?
+    private var retiredEngines: [AVAudioEngine] = []  // prevent use-after-free on audio thread
+    private var engineGeneration = 0
     private var converter: AVAudioConverter?
     private let targetFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32,
@@ -24,21 +26,21 @@ final class AudioCaptureManager: @unchecked Sendable {
     var onRecordingInterrupted: (() -> Void)?
     var onDeviceChanged: (() -> Void)?
 
-    var selectedDeviceID: AudioDeviceID?
-
-    func selectDevice(_ deviceID: AudioDeviceID?) {
-        selectedDeviceID = deviceID
-        print("[dictate] Device selection set to: \(deviceID.map { String($0) } ?? "system default")")
+    init() {
+        setupEngineObserver()
+        installDefaultInputListener()
     }
 
-    init() {
-        NotificationCenter.default.addObserver(
+    private func setupEngineObserver() {
+        if let old = configChangeObserver {
+            NotificationCenter.default.removeObserver(old)
+        }
+        configChangeObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: engine, queue: .main
         ) { [weak self] _ in
             self?.handleConfigChange()
         }
-        installDefaultInputListener()
     }
 
     deinit {
@@ -112,39 +114,39 @@ final class AudioCaptureManager: @unchecked Sendable {
         if isPriming {
             isPriming = false
             engine.inputNode.removeTap(onBus: 0)
-            if selectedDeviceID == nil {
-                // No device override - reuse running engine
-                installRecordingTap()
-                isRecording = true
-                print("[dictate] Recording started (primed)")
-                return
-            }
-            // Device selected: must stop + reset engine so AUHAL is fully deinitialized
-            engine.stop()
-            engine.reset()
+            installRecordingTap()
+            isRecording = true
+            print("[dictate] Recording started (primed)")
+            return
         }
 
         var lastError: Error = AudioCaptureError.noInputDevice
         for attempt in 1...5 {
-            if isSettling {
+            // Wait for settling to finish - engine may be replaced multiple times
+            // during this wait, that's fine since we haven't installed taps yet.
+            while isSettling {
                 print("[dictate] Audio settling, waiting before attempt \(attempt)")
-                try await Task.sleep(for: .milliseconds(500))
+                try await Task.sleep(for: .milliseconds(300))
             }
 
-            // Apply device BEFORE format query so AUHAL negotiates format with the target device
-            _ = applyDeviceSelection()
+            // Snapshot generation AFTER settling, right before touching the engine
+            let gen = engineGeneration
+
+            installRecordingTap()
+            engine.prepare()
+
+            // Engine replaced between tap install and start - taps are on dead engine, retry
+            guard engineGeneration == gen else {
+                print("[dictate] Engine replaced after tap install, retrying")
+                continue
+            }
 
             let hwFormat = engine.inputNode.outputFormat(forBus: 0)
             guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
+                engine.inputNode.removeTap(onBus: 0)
                 throw AudioCaptureError.noInputDevice
             }
 
-            // Pass nil so AVAudioEngine uses the native hardware format at install time.
-            // Avoids the "Input HW format and tap format not matching" crash when the
-            // format changes between our outputFormat() read and installTap().
-            // Converter is created lazily in processAudioBuffer from the actual buffer format.
-            installRecordingTap()
-            engine.prepare()
             do {
                 try engine.start()
                 isRecording = true
@@ -153,36 +155,13 @@ final class AudioCaptureManager: @unchecked Sendable {
             } catch {
                 lastError = error
                 engine.inputNode.removeTap(onBus: 0)
+                print("[dictate] engine.start() failed attempt \(attempt): \(error)")
                 if attempt < 5 {
                     try await Task.sleep(for: .milliseconds(500))
                 }
             }
         }
         throw lastError
-    }
-
-    private func applyDeviceSelection() -> Bool {
-        guard let targetID = selectedDeviceID else {
-            return true // No selection - use system default
-        }
-        guard let inputUnit = engine.inputNode.audioUnit else {
-            return true // audioUnit not yet available - use system default
-        }
-        var deviceID = targetID
-        let status = AudioUnitSetProperty(
-            inputUnit,
-            kAudioOutputUnitProperty_CurrentDevice,
-            kAudioUnitScope_Global,
-            0,
-            &deviceID,
-            UInt32(MemoryLayout<AudioDeviceID>.size)
-        )
-        if status != noErr {
-            print("[dictate] Failed to set input device \(targetID): \(status)")
-            return false
-        }
-        print("[dictate] Applied device selection: \(targetID)")
-        return true
     }
 
     private func installRecordingTap() {
@@ -264,26 +243,68 @@ final class AudioCaptureManager: @unchecked Sendable {
     }
 
     private func handleConfigChange() {
+        // Stop current activity immediately
         primeStopTimer?.cancel()
         primeStopTimer = nil
         isPriming = false
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
-        engine.reset()
         converterLock.withLock { converter = nil }
         if isRecording {
             print("[dictate] Audio config changed during recording")
             isRecording = false
             onRecordingInterrupted?()
         }
+
+        // Debounce: coalesce rapid config changes (BT connect fires many).
+        // Engine replacement happens once in the settling timer, not per notification.
         isSettling = true
         configChangeTimer?.cancel()
+        print("[dictate] Config change - settling")
         let work = DispatchWorkItem { [weak self] in
-            self?.isSettling = false
-            self?.onDeviceChanged?()
+            guard let self else { return }
+            self.replaceEngine()
+            self.validateFormatStability { [weak self] stable in
+                guard let self else { return }
+                self.isSettling = false
+                if !stable {
+                    print("[dictate] Format unstable after settling")
+                }
+                self.onDeviceChanged?()
+            }
         }
         configChangeTimer = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
+    }
+
+    private func replaceEngine() {
+        let oldEngine = engine
+        retiredEngines.append(oldEngine)
+
+        engine = AVAudioEngine()
+        engineGeneration += 1
+        setupEngineObserver()
+
+        // Release retired engines after audio thread has drained
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.retiredEngines.removeAll()
+        }
+        print("[dictate] Engine replaced (gen \(engineGeneration))")
+    }
+
+    private func validateFormatStability(completion: @escaping @Sendable (Bool) -> Void) {
+        let format1 = engine.inputNode.outputFormat(forBus: 0)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self else {
+                completion(false)
+                return
+            }
+            let format2 = self.engine.inputNode.outputFormat(forBus: 0)
+            let stable = format1.sampleRate == format2.sampleRate &&
+                         format1.channelCount == format2.channelCount &&
+                         format1.sampleRate > 0
+            completion(stable)
+        }
     }
 }
 
