@@ -68,15 +68,11 @@ struct SettingsView: View {
                     get: { settings.selectedInputDeviceID },
                     set: { settings.selectedInputDeviceID = $0 }
                 )) {
-                    let defaultName = SystemAudioController.defaultInputDeviceName ?? "System Default"
-                    Text("\(defaultName) (Default)").tag(AudioDeviceID?.none)
+                    Text("Automatic").tag(AudioDeviceID?.none)
                     ForEach(inputDevices, id: \.id) { device in
                         Text(device.name).tag(Optional(device.id))
                     }
                 }
-
-                Toggle("Use built-in mic when Bluetooth connected", isOn: Bindable(settings).preferBuiltInMicWhenBT)
-                    .font(.caption)
 
                 if !outputDeviceName.isEmpty {
                     HStack {
@@ -145,12 +141,12 @@ struct SettingsView: View {
         .frame(width: 280)
         .onAppear {
             microphoneGranted = MicrophonePermission.isGranted
-            inputDevices = SystemAudioController.allInputDevices.filter { !SystemAudioController.isDeviceBluetooth($0.id) }
+            inputDevices = SystemAudioController.allInputDevices
         }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
             accessibilityGranted = AccessibilityPermission.isGranted
             microphoneGranted = MicrophonePermission.isGranted
-            inputDevices = SystemAudioController.allInputDevices.filter { !SystemAudioController.isDeviceBluetooth($0.id) }
+            inputDevices = SystemAudioController.allInputDevices
             outputDeviceName = SystemAudioController.defaultOutputDeviceName ?? ""
         }
     }

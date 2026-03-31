@@ -31,10 +31,6 @@ final class Settings {
         }
     }
 
-    var preferBuiltInMicWhenBT: Bool {
-        didSet { UserDefaults.standard.set(preferBuiltInMicWhenBT, forKey: "preferBuiltInMicWhenBT") }
-    }
-
     var engineState: EngineState = .loading
 
     var launchAtLogin: Bool {
@@ -59,7 +55,6 @@ final class Settings {
             "whisperModel": "openai_whisper-tiny.en",
             "noFocusBehavior": NoFocusBehavior.clipboard.rawValue,
             "muteSystemAudio": true,
-            "preferBuiltInMicWhenBT": true,
         ])
 
         self.whisperModel = defaults.string(forKey: "whisperModel") ?? "openai_whisper-tiny.en"
@@ -70,7 +65,6 @@ final class Settings {
         } else {
             self.selectedInputDeviceID = nil
         }
-        self.preferBuiltInMicWhenBT = defaults.bool(forKey: "preferBuiltInMicWhenBT")
     }
 }
 

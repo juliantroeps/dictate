@@ -60,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Apply saved device selection via system default + observe changes
+        // Apply saved device selection + observe changes
         if let deviceID = settings.selectedInputDeviceID {
             SystemAudioController.setDefaultInputDevice(deviceID)
         }
@@ -215,6 +215,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 if let deviceID = self.settings.selectedInputDeviceID {
                     SystemAudioController.setDefaultInputDevice(deviceID)
+                } else {
+                    // Switched to Automatic - run fallback check
+                    self.handleDeviceChanged()
                 }
                 self.observeDeviceSelection()
             }
@@ -231,29 +234,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleDeviceChanged() {
         guard let defaultID = SystemAudioController.defaultInputDeviceID else { return }
 
-        // Manual selection: re-apply if system default drifted (e.g. after BT reconnect).
-        // If the selected device disappeared, clear the selection and fall through.
-        if let manualID = settings.selectedInputDeviceID {
-            let exists = SystemAudioController.allInputDevices.contains { $0.id == manualID }
-            if !exists {
-                settings.selectedInputDeviceID = nil
-            } else if defaultID != manualID {
-                SystemAudioController.setDefaultInputDevice(manualID)
-                print("[dictate] Re-applied manual device selection: \(manualID)")
-                return  // will re-trigger via config change
-            }
-        } else if settings.preferBuiltInMicWhenBT,
-                  SystemAudioController.isDeviceBluetooth(defaultID),
-                  let builtInID = SystemAudioController.builtInInputDeviceID {
-            // Auto-fallback: BT is default, switch to built-in
+        // Auto-fallback: BT is system default and no manual override
+        if settings.selectedInputDeviceID == nil,
+           SystemAudioController.isDeviceBluetooth(defaultID),
+           let builtInID = SystemAudioController.builtInInputDeviceID {
             SystemAudioController.setDefaultInputDevice(builtInID)
             print("[dictate] Auto-fallback: set system default to built-in mic")
-            return  // will re-trigger via config change
+            return
         }
 
         // Show device notification (not during recording/processing)
         guard case .idle = overlay.state.phase else { return }
-        let activeName = SystemAudioController.defaultInputDeviceName ?? "Unknown mic"
+        let activeName: String
+        if let selectedID = settings.selectedInputDeviceID {
+            activeName = SystemAudioController.deviceName(for: selectedID) ?? "Selected mic"
+        } else {
+            activeName = SystemAudioController.defaultInputDeviceName ?? "Unknown mic"
+        }
         overlay.showInfo(activeName, duration: 2.0)
     }
 

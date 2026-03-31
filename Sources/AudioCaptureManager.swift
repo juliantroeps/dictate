@@ -4,8 +4,7 @@ import CoreAudio
 final class AudioCaptureManager: @unchecked Sendable {
     private var engine = AVAudioEngine()
     private var configChangeObserver: Any?
-    private var retiredEngines: [AVAudioEngine] = []  // prevent use-after-free on audio thread
-    private var engineGeneration = 0
+    private var resetGeneration = 0
     private var converter: AVAudioConverter?
     private let targetFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32,
@@ -39,7 +38,8 @@ final class AudioCaptureManager: @unchecked Sendable {
             forName: .AVAudioEngineConfigurationChange,
             object: engine, queue: .main
         ) { [weak self] _ in
-            self?.handleConfigChange()
+            guard let self, !self.isSettling else { return }
+            self.handleConfigChange()
         }
     }
 
@@ -57,8 +57,9 @@ final class AudioCaptureManager: @unchecked Sendable {
     private lazy var defaultInputListenerBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            // Only handle idle device changes; AVAudioEngineConfigurationChange covers the recording case.
-            guard !self.isRecording else { return }
+            // Skip during recording (AVAudioEngineConfigurationChange handles that)
+            // and during settling (prevents BT HFP re-trigger loop).
+            guard !self.isRecording, !self.isSettling else { return }
             self.handleConfigChange()
         }
     }
@@ -130,14 +131,14 @@ final class AudioCaptureManager: @unchecked Sendable {
             }
 
             // Snapshot generation AFTER settling, right before touching the engine
-            let gen = engineGeneration
+            let gen = resetGeneration
 
             installRecordingTap()
             engine.prepare()
 
-            // Engine replaced between tap install and start - taps are on dead engine, retry
-            guard engineGeneration == gen else {
-                print("[dictate] Engine replaced after tap install, retrying")
+            // Engine reset between tap install and start - retry
+            guard resetGeneration == gen else {
+                print("[dictate] Engine reset after tap install, retrying")
                 continue
             }
 
@@ -249,7 +250,9 @@ final class AudioCaptureManager: @unchecked Sendable {
         isPriming = false
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        engine.reset()
         converterLock.withLock { converter = nil }
+        resetGeneration += 1
         if isRecording {
             print("[dictate] Audio config changed during recording")
             isRecording = false
@@ -257,13 +260,11 @@ final class AudioCaptureManager: @unchecked Sendable {
         }
 
         // Debounce: coalesce rapid config changes (BT connect fires many).
-        // Engine replacement happens once in the settling timer, not per notification.
         isSettling = true
         configChangeTimer?.cancel()
         print("[dictate] Config change - settling")
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            self.replaceEngine()
             self.validateFormatStability { [weak self] stable in
                 guard let self else { return }
                 self.isSettling = false
@@ -275,21 +276,6 @@ final class AudioCaptureManager: @unchecked Sendable {
         }
         configChangeTimer = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
-    }
-
-    private func replaceEngine() {
-        let oldEngine = engine
-        retiredEngines.append(oldEngine)
-
-        engine = AVAudioEngine()
-        engineGeneration += 1
-        setupEngineObserver()
-
-        // Release retired engines after audio thread has drained
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            self?.retiredEngines.removeAll()
-        }
-        print("[dictate] Engine replaced (gen \(engineGeneration))")
     }
 
     private func validateFormatStability(completion: @escaping @Sendable (Bool) -> Void) {
