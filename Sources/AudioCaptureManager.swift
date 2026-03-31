@@ -147,6 +147,8 @@ final class AudioCaptureManager: @unchecked Sendable {
 
     private func installRecordingTap() {
         converterLock.withLock { converter = nil }
+        // Defensive remove: if primeInput ran while startRecording was suspended (await), a tap is already installed.
+        engine.inputNode.removeTap(onBus: 0)
         engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] pcmBuffer, _ in
             self?.processAudioBuffer(pcmBuffer)
         }
