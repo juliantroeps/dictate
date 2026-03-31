@@ -119,6 +119,22 @@ enum SystemAudioController {
         return name as String
     }
 
+    @discardableResult
+    static func setDefaultInputDevice(_ deviceID: AudioDeviceID) -> Bool {
+        var id = deviceID
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = AudioObjectSetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &addr, 0, nil,
+            UInt32(MemoryLayout<AudioDeviceID>.size), &id
+        )
+        return status == noErr
+    }
+
     static func setMuted(_ muted: Bool) {
         let deviceID = defaultOutputDevice
         guard deviceID != 0 else { return }

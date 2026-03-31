@@ -75,6 +75,9 @@ struct SettingsView: View {
                     }
                 }
 
+                Toggle("Use built-in mic when Bluetooth connected", isOn: Bindable(settings).preferBuiltInMicWhenBT)
+                    .font(.caption)
+
                 if !outputDeviceName.isEmpty {
                     HStack {
                         Text("Output").foregroundStyle(.secondary)
