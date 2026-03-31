@@ -203,6 +203,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard case .idle = overlay.state.phase else { return }
         let name = SystemAudioController.defaultInputDeviceName ?? "Unknown mic"
         overlay.showInfo(name, duration: 2.0)
+
+        print("[dictate] Devices: \(SystemAudioController.allInputDevices.map { "\($0.name): \(SystemAudioController.isDeviceBluetooth($0.id))" })")
     }
 
     private func prepareEngine(attempts: Int = 3) {
