@@ -2,7 +2,9 @@ import AVFoundation
 import CoreAudio
 
 final class AudioCaptureManager: @unchecked Sendable {
-    private let engine = AVAudioEngine()
+    private var engine = AVAudioEngine()
+    private var configChangeObserver: Any?
+    private var resetGeneration = 0
     private var converter: AVAudioConverter?
     private let targetFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32,
@@ -24,13 +26,21 @@ final class AudioCaptureManager: @unchecked Sendable {
     var onDeviceChanged: (() -> Void)?
 
     init() {
-        NotificationCenter.default.addObserver(
+        setupEngineObserver()
+        installDefaultInputListener()
+    }
+
+    private func setupEngineObserver() {
+        if let old = configChangeObserver {
+            NotificationCenter.default.removeObserver(old)
+        }
+        configChangeObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: engine, queue: .main
         ) { [weak self] _ in
-            self?.handleConfigChange()
+            guard let self, !self.isSettling else { return }
+            self.handleConfigChange()
         }
-        installDefaultInputListener()
     }
 
     deinit {
@@ -47,8 +57,9 @@ final class AudioCaptureManager: @unchecked Sendable {
     private lazy var defaultInputListenerBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            // Only handle idle device changes; AVAudioEngineConfigurationChange covers the recording case.
-            guard !self.isRecording else { return }
+            // Skip during recording (AVAudioEngineConfigurationChange handles that)
+            // and during settling (prevents BT HFP re-trigger loop).
+            guard !self.isRecording, !self.isSettling else { return }
             self.handleConfigChange()
         }
     }
@@ -102,7 +113,6 @@ final class AudioCaptureManager: @unchecked Sendable {
         bufferLock.withLock { buffer.removeAll(keepingCapacity: true) }
 
         if isPriming {
-            // Engine already running - swap prime tap for recording tap
             isPriming = false
             engine.inputNode.removeTap(onBus: 0)
             installRecordingTap()
@@ -113,22 +123,31 @@ final class AudioCaptureManager: @unchecked Sendable {
 
         var lastError: Error = AudioCaptureError.noInputDevice
         for attempt in 1...5 {
-            if isSettling {
+            // Wait for settling to finish - engine may be replaced multiple times
+            // during this wait, that's fine since we haven't installed taps yet.
+            while isSettling {
                 print("[dictate] Audio settling, waiting before attempt \(attempt)")
-                try await Task.sleep(for: .milliseconds(500))
+                try await Task.sleep(for: .milliseconds(300))
+            }
+
+            // Snapshot generation AFTER settling, right before touching the engine
+            let gen = resetGeneration
+
+            installRecordingTap()
+            engine.prepare()
+
+            // Engine reset between tap install and start - retry
+            guard resetGeneration == gen else {
+                print("[dictate] Engine reset after tap install, retrying")
+                continue
             }
 
             let hwFormat = engine.inputNode.outputFormat(forBus: 0)
             guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
+                engine.inputNode.removeTap(onBus: 0)
                 throw AudioCaptureError.noInputDevice
             }
 
-            // Pass nil so AVAudioEngine uses the native hardware format at install time.
-            // Avoids the "Input HW format and tap format not matching" crash when the
-            // format changes between our outputFormat() read and installTap().
-            // Converter is created lazily in processAudioBuffer from the actual buffer format.
-            installRecordingTap()
-            engine.prepare()
             do {
                 try engine.start()
                 isRecording = true
@@ -137,6 +156,7 @@ final class AudioCaptureManager: @unchecked Sendable {
             } catch {
                 lastError = error
                 engine.inputNode.removeTap(onBus: 0)
+                print("[dictate] engine.start() failed attempt \(attempt): \(error)")
                 if attempt < 5 {
                     try await Task.sleep(for: .milliseconds(500))
                 }
@@ -147,6 +167,8 @@ final class AudioCaptureManager: @unchecked Sendable {
 
     private func installRecordingTap() {
         converterLock.withLock { converter = nil }
+        // Defensive remove: if primeInput ran while startRecording was suspended (await), a tap is already installed.
+        engine.inputNode.removeTap(onBus: 0)
         engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] pcmBuffer, _ in
             self?.processAudioBuffer(pcmBuffer)
         }
@@ -222,26 +244,55 @@ final class AudioCaptureManager: @unchecked Sendable {
     }
 
     private func handleConfigChange() {
+        // Stop current activity immediately
         primeStopTimer?.cancel()
         primeStopTimer = nil
         isPriming = false
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
-        engine.reset()
+        // Create new engine - reset() alone doesn't reinitialize for different devices
+        engine = AVAudioEngine()
+        setupEngineObserver()
         converterLock.withLock { converter = nil }
+        resetGeneration += 1
         if isRecording {
             print("[dictate] Audio config changed during recording")
             isRecording = false
             onRecordingInterrupted?()
         }
+
+        // Debounce: coalesce rapid config changes (BT connect fires many).
         isSettling = true
         configChangeTimer?.cancel()
+        print("[dictate] Config change - settling")
         let work = DispatchWorkItem { [weak self] in
-            self?.isSettling = false
-            self?.onDeviceChanged?()
+            guard let self else { return }
+            self.validateFormatStability { [weak self] stable in
+                guard let self else { return }
+                self.isSettling = false
+                if !stable {
+                    print("[dictate] Format unstable after settling")
+                }
+                self.onDeviceChanged?()
+            }
         }
         configChangeTimer = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
+    }
+
+    private func validateFormatStability(completion: @escaping @Sendable (Bool) -> Void) {
+        let format1 = engine.inputNode.outputFormat(forBus: 0)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self else {
+                completion(false)
+                return
+            }
+            let format2 = self.engine.inputNode.outputFormat(forBus: 0)
+            let stable = format1.sampleRate == format2.sampleRate &&
+                         format1.channelCount == format2.channelCount &&
+                         format1.sampleRate > 0
+            completion(stable)
+        }
     }
 }
 

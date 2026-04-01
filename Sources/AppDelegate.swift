@@ -60,6 +60,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Apply saved device selection + observe changes
+        if let uid = settings.selectedInputDeviceUID,
+           let deviceID = SystemAudioController.audioDeviceID(forUID: uid) {
+            SystemAudioController.setDefaultInputDevice(deviceID)
+        }
+        observeDeviceSelection()
+
+        // Run auto-fallback check now in case BT is already the default at launch
+        handleDeviceChanged()
+
         keyListener.onKeyDown = { [weak self] in
             self?.handleKeyDown()
         }
@@ -117,7 +127,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settings.muteSystemAudio { SystemAudioController.setMuted(false) }
         let samples = audioCapture.stopRecording()
 
-        guard let downTime = keyDownTime else { return }
+        guard let downTime = keyDownTime else {
+            // Recording was interrupted (device change cleared keyDownTime) - ensure overlay is reset
+            if case .recording = overlay.state.phase {
+                overlay.state.phase = .idle
+                overlay.hide()
+            }
+            return
+        }
         keyDownTime = nil
 
         let elapsed = Double(DispatchTime.now().uptimeNanoseconds - downTime.uptimeNanoseconds) / 1_000_000_000
@@ -191,6 +208,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func observeDeviceSelection() {
+        withObservationTracking {
+            _ = settings.selectedInputDeviceUID
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                if let uid = self.settings.selectedInputDeviceUID,
+                   let deviceID = SystemAudioController.audioDeviceID(forUID: uid) {
+                    SystemAudioController.setDefaultInputDevice(deviceID)
+                } else {
+                    // Switched to Automatic - run fallback check
+                    self.handleDeviceChanged()
+                }
+                self.observeDeviceSelection()
+            }
+        }
+    }
+
     private func handleRecordingInterrupted() {
         if settings.muteSystemAudio { SystemAudioController.setMuted(false) }
         keyDownTime = nil
@@ -199,10 +234,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleDeviceChanged() {
-        // Don't show device notification during recording/processing
+        guard let defaultID = SystemAudioController.defaultInputDeviceID else { return }
+
+        // Manual selection: re-apply on every device change
+        if let uid = settings.selectedInputDeviceUID,
+           let resolvedID = SystemAudioController.audioDeviceID(forUID: uid),
+           resolvedID != defaultID {
+            SystemAudioController.setDefaultInputDevice(resolvedID)
+            print("[dictate] Re-applied manual selection: \(uid)")
+            return
+        }
+
+        // Auto-fallback: BT is system default and no valid manual override
+        // Treat unresolved UID (disconnected device) same as "Automatic" for fallback
+        let hasValidManualSelection = settings.selectedInputDeviceUID.flatMap {
+            SystemAudioController.audioDeviceID(forUID: $0)
+        } != nil
+        if !hasValidManualSelection,
+           SystemAudioController.isDeviceBluetooth(defaultID),
+           let builtInID = SystemAudioController.builtInInputDeviceID {
+            SystemAudioController.setDefaultInputDevice(builtInID)
+            print("[dictate] Auto-fallback: set system default to built-in mic")
+            return
+        }
+
+        // Show device notification (not during recording/processing)
         guard case .idle = overlay.state.phase else { return }
-        let name = SystemAudioController.defaultInputDeviceName ?? "Unknown mic"
-        overlay.showInfo(name, duration: 2.0)
+        let activeName: String
+        if let uid = settings.selectedInputDeviceUID,
+           let resolvedID = SystemAudioController.audioDeviceID(forUID: uid) {
+            activeName = SystemAudioController.deviceName(for: resolvedID) ?? "Selected mic"
+        } else {
+            activeName = SystemAudioController.defaultInputDeviceName ?? "Unknown mic"
+        }
+        overlay.showInfo(activeName, duration: 2.0)
     }
 
     private func prepareEngine(attempts: Int = 3) {

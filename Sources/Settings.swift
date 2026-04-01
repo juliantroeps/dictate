@@ -20,6 +20,17 @@ final class Settings {
         didSet { UserDefaults.standard.set(muteSystemAudio, forKey: "muteSystemAudio") }
     }
 
+    /// Stable device UID for manual input selection (persists across BT reconnects)
+    var selectedInputDeviceUID: String? {
+        didSet {
+            if let uid = selectedInputDeviceUID {
+                UserDefaults.standard.set(uid, forKey: "selectedInputDeviceUID")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "selectedInputDeviceUID")
+            }
+        }
+    }
+
     var engineState: EngineState = .loading
 
     var launchAtLogin: Bool {
@@ -49,6 +60,7 @@ final class Settings {
         self.whisperModel = defaults.string(forKey: "whisperModel") ?? "openai_whisper-tiny.en"
         self.noFocusBehavior = NoFocusBehavior(rawValue: defaults.string(forKey: "noFocusBehavior") ?? "") ?? .clipboard
         self.muteSystemAudio = defaults.bool(forKey: "muteSystemAudio")
+        self.selectedInputDeviceUID = defaults.string(forKey: "selectedInputDeviceUID")
     }
 }
 

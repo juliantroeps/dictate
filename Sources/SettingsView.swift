@@ -1,10 +1,11 @@
+import CoreAudio
 import SwiftUI
 
 struct SettingsView: View {
     private let settings = Settings.shared
     @State private var accessibilityGranted = AccessibilityPermission.isGranted
     @State private var microphoneGranted = MicrophonePermission.isGranted
-    @State private var inputDeviceName = SystemAudioController.defaultInputDeviceName ?? ""
+    @State private var inputDevices: [(id: AudioDeviceID, name: String)] = []
     @State private var outputDeviceName = SystemAudioController.defaultOutputDeviceName ?? ""
 
     private let models: [(id: String, label: String, memory: String)] = [
@@ -63,13 +64,33 @@ struct SettingsView: View {
 
                 Toggle("Mute system audio while recording", isOn: Bindable(settings).muteSystemAudio)
 
-                if !inputDeviceName.isEmpty {
-                    HStack {
-                        Text("Input").foregroundStyle(.secondary)
-                        Spacer()
-                        Text(inputDeviceName).foregroundStyle(.secondary)
+                Picker("Input", selection: Binding<AudioDeviceID?>(
+                    get: {
+                        // Resolve UID to current device ID for picker display
+                        guard let uid = settings.selectedInputDeviceUID else { return nil }
+                        return SystemAudioController.audioDeviceID(forUID: uid)
+                    },
+                    set: { (newID: AudioDeviceID?) in
+                        // Store stable UID when user selects a device
+                        if let id = newID {
+                            settings.selectedInputDeviceUID = SystemAudioController.deviceUID(for: id)
+                        } else {
+                            settings.selectedInputDeviceUID = nil
+                        }
                     }
-                    .font(.caption)
+                )) {
+                    Text("Automatic").tag(AudioDeviceID?.none)
+                    ForEach(inputDevices, id: \.id) { device in
+                        Text(device.name).tag(Optional(device.id))
+                    }
+                }
+
+                // Warn when saved device is disconnected - fallback is active
+                if let savedUID = settings.selectedInputDeviceUID,
+                   SystemAudioController.audioDeviceID(forUID: savedUID) == nil {
+                    Text("Saved device not connected - using fallback")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
                 }
 
                 if !outputDeviceName.isEmpty {
@@ -137,11 +158,14 @@ struct SettingsView: View {
         }
         .padding()
         .frame(width: 280)
-        .onAppear { microphoneGranted = MicrophonePermission.isGranted }
+        .onAppear {
+            microphoneGranted = MicrophonePermission.isGranted
+            inputDevices = SystemAudioController.allInputDevices
+        }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
             accessibilityGranted = AccessibilityPermission.isGranted
             microphoneGranted = MicrophonePermission.isGranted
-            inputDeviceName = SystemAudioController.defaultInputDeviceName ?? ""
+            inputDevices = SystemAudioController.allInputDevices
             outputDeviceName = SystemAudioController.defaultOutputDeviceName ?? ""
         }
     }
