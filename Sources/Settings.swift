@@ -1,4 +1,3 @@
-import CoreAudio
 import Foundation
 import ServiceManagement
 
@@ -21,12 +20,13 @@ final class Settings {
         didSet { UserDefaults.standard.set(muteSystemAudio, forKey: "muteSystemAudio") }
     }
 
-    var selectedInputDeviceID: AudioDeviceID? {
+    /// Stable device UID for manual input selection (persists across BT reconnects)
+    var selectedInputDeviceUID: String? {
         didSet {
-            if let id = selectedInputDeviceID {
-                UserDefaults.standard.set(Int(id), forKey: "selectedInputDeviceID")
+            if let uid = selectedInputDeviceUID {
+                UserDefaults.standard.set(uid, forKey: "selectedInputDeviceUID")
             } else {
-                UserDefaults.standard.removeObject(forKey: "selectedInputDeviceID")
+                UserDefaults.standard.removeObject(forKey: "selectedInputDeviceUID")
             }
         }
     }
@@ -60,11 +60,7 @@ final class Settings {
         self.whisperModel = defaults.string(forKey: "whisperModel") ?? "openai_whisper-tiny.en"
         self.noFocusBehavior = NoFocusBehavior(rawValue: defaults.string(forKey: "noFocusBehavior") ?? "") ?? .clipboard
         self.muteSystemAudio = defaults.bool(forKey: "muteSystemAudio")
-        if let savedID = defaults.object(forKey: "selectedInputDeviceID") as? Int {
-            self.selectedInputDeviceID = AudioDeviceID(savedID)
-        } else {
-            self.selectedInputDeviceID = nil
-        }
+        self.selectedInputDeviceUID = defaults.string(forKey: "selectedInputDeviceUID")
     }
 }
 

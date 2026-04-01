@@ -64,9 +64,20 @@ struct SettingsView: View {
 
                 Toggle("Mute system audio while recording", isOn: Bindable(settings).muteSystemAudio)
 
-                Picker("Input", selection: Binding(
-                    get: { settings.selectedInputDeviceID },
-                    set: { settings.selectedInputDeviceID = $0 }
+                Picker("Input", selection: Binding<AudioDeviceID?>(
+                    get: {
+                        // Resolve UID to current device ID for picker display
+                        guard let uid = settings.selectedInputDeviceUID else { return nil }
+                        return SystemAudioController.audioDeviceID(forUID: uid)
+                    },
+                    set: { (newID: AudioDeviceID?) in
+                        // Store stable UID when user selects a device
+                        if let id = newID {
+                            settings.selectedInputDeviceUID = SystemAudioController.deviceUID(for: id)
+                        } else {
+                            settings.selectedInputDeviceUID = nil
+                        }
+                    }
                 )) {
                     Text("Automatic").tag(AudioDeviceID?.none)
                     ForEach(inputDevices, id: \.id) { device in
@@ -142,22 +153,12 @@ struct SettingsView: View {
         .onAppear {
             microphoneGranted = MicrophonePermission.isGranted
             inputDevices = SystemAudioController.allInputDevices
-            // Clear stale selection on launch
-            if let selectedID = settings.selectedInputDeviceID,
-               !inputDevices.contains(where: { $0.id == selectedID }) {
-                settings.selectedInputDeviceID = nil
-            }
         }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
             accessibilityGranted = AccessibilityPermission.isGranted
             microphoneGranted = MicrophonePermission.isGranted
             inputDevices = SystemAudioController.allInputDevices
             outputDeviceName = SystemAudioController.defaultOutputDeviceName ?? ""
-            // Clear stale selection (BT device IDs change during HFP switch)
-            if let selectedID = settings.selectedInputDeviceID,
-               !inputDevices.contains(where: { $0.id == selectedID }) {
-                settings.selectedInputDeviceID = nil
-            }
         }
     }
 }

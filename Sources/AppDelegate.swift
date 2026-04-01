@@ -61,7 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Apply saved device selection + observe changes
-        if let deviceID = settings.selectedInputDeviceID {
+        if let uid = settings.selectedInputDeviceUID,
+           let deviceID = SystemAudioController.audioDeviceID(forUID: uid) {
             SystemAudioController.setDefaultInputDevice(deviceID)
         }
         observeDeviceSelection()
@@ -209,11 +210,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func observeDeviceSelection() {
         withObservationTracking {
-            _ = settings.selectedInputDeviceID
+            _ = settings.selectedInputDeviceUID
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                if let deviceID = self.settings.selectedInputDeviceID {
+                if let uid = self.settings.selectedInputDeviceUID,
+                   let deviceID = SystemAudioController.audioDeviceID(forUID: uid) {
                     SystemAudioController.setDefaultInputDevice(deviceID)
                 } else {
                     // Switched to Automatic - run fallback check
@@ -234,8 +236,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleDeviceChanged() {
         guard let defaultID = SystemAudioController.defaultInputDeviceID else { return }
 
+        // Manual selection: re-apply on every device change
+        if let uid = settings.selectedInputDeviceUID,
+           let resolvedID = SystemAudioController.audioDeviceID(forUID: uid),
+           resolvedID != defaultID {
+            SystemAudioController.setDefaultInputDevice(resolvedID)
+            print("[dictate] Re-applied manual selection: \(uid)")
+            return
+        }
+
         // Auto-fallback: BT is system default and no manual override
-        if settings.selectedInputDeviceID == nil,
+        if settings.selectedInputDeviceUID == nil,
            SystemAudioController.isDeviceBluetooth(defaultID),
            let builtInID = SystemAudioController.builtInInputDeviceID {
             SystemAudioController.setDefaultInputDevice(builtInID)
@@ -246,8 +257,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Show device notification (not during recording/processing)
         guard case .idle = overlay.state.phase else { return }
         let activeName: String
-        if let selectedID = settings.selectedInputDeviceID {
-            activeName = SystemAudioController.deviceName(for: selectedID) ?? "Selected mic"
+        if let uid = settings.selectedInputDeviceUID,
+           let resolvedID = SystemAudioController.audioDeviceID(forUID: uid) {
+            activeName = SystemAudioController.deviceName(for: resolvedID) ?? "Selected mic"
         } else {
             activeName = SystemAudioController.defaultInputDeviceName ?? "Unknown mic"
         }

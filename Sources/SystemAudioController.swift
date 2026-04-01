@@ -123,6 +123,47 @@ enum SystemAudioController {
         return name as String
     }
 
+    /// Stable device UID - persists across boots and BT reconnects (unlike AudioDeviceID)
+    static func deviceUID(for deviceID: AudioDeviceID) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var uidRef: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<CFString>.size)
+        guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &uidRef) == noErr,
+              let uid = uidRef?.takeRetainedValue() else {
+            return nil
+        }
+        return uid as String
+    }
+
+    /// Resolve stable UID to current AudioDeviceID (nil if device not present)
+    static func audioDeviceID(forUID uid: String) -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceID = AudioDeviceID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var qualifierUID = uid as CFString
+        let qualifierSize = UInt32(MemoryLayout<CFString>.size)
+        let status = withUnsafeMutablePointer(to: &qualifierUID) { qualifierPtr in
+            AudioObjectGetPropertyData(
+                AudioObjectID(kAudioObjectSystemObject),
+                &address,
+                qualifierSize,
+                qualifierPtr,
+                &size,
+                &deviceID
+            )
+        }
+        guard status == noErr, deviceID != kAudioObjectUnknown else { return nil }
+        return deviceID
+    }
+
     @discardableResult
     static func setDefaultInputDevice(_ deviceID: AudioDeviceID) -> Bool {
         var id = deviceID
