@@ -142,12 +142,22 @@ struct SettingsView: View {
         .onAppear {
             microphoneGranted = MicrophonePermission.isGranted
             inputDevices = SystemAudioController.allInputDevices
+            // Clear stale selection on launch
+            if let selectedID = settings.selectedInputDeviceID,
+               !inputDevices.contains(where: { $0.id == selectedID }) {
+                settings.selectedInputDeviceID = nil
+            }
         }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
             accessibilityGranted = AccessibilityPermission.isGranted
             microphoneGranted = MicrophonePermission.isGranted
             inputDevices = SystemAudioController.allInputDevices
             outputDeviceName = SystemAudioController.defaultOutputDeviceName ?? ""
+            // Clear stale selection (BT device IDs change during HFP switch)
+            if let selectedID = settings.selectedInputDeviceID,
+               !inputDevices.contains(where: { $0.id == selectedID }) {
+                settings.selectedInputDeviceID = nil
+            }
         }
     }
 }

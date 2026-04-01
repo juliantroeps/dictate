@@ -250,7 +250,9 @@ final class AudioCaptureManager: @unchecked Sendable {
         isPriming = false
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
-        engine.reset()
+        // Create new engine - reset() alone doesn't reinitialize for different devices
+        engine = AVAudioEngine()
+        setupEngineObserver()
         converterLock.withLock { converter = nil }
         resetGeneration += 1
         if isRecording {
