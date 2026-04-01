@@ -58,6 +58,10 @@ enum SystemAudioController {
             return []
         }
         return deviceIDs.compactMap { deviceID -> (id: AudioDeviceID, name: String)? in
+            // Skip aggregate devices (created internally by AVAudioEngine)
+            if transportType(for: deviceID) == kAudioDeviceTransportTypeAggregate {
+                return nil
+            }
             var streamSize: UInt32 = 0
             var streamAddr = AudioObjectPropertyAddress(
                 mSelector: kAudioDevicePropertyStreams,
