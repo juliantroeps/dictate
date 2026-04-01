@@ -245,8 +245,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // Auto-fallback: BT is system default and no manual override
-        if settings.selectedInputDeviceUID == nil,
+        // Auto-fallback: BT is system default and no valid manual override
+        // Treat unresolved UID (disconnected device) same as "Automatic" for fallback
+        let hasValidManualSelection = settings.selectedInputDeviceUID.flatMap {
+            SystemAudioController.audioDeviceID(forUID: $0)
+        } != nil
+        if !hasValidManualSelection,
            SystemAudioController.isDeviceBluetooth(defaultID),
            let builtInID = SystemAudioController.builtInInputDeviceID {
             SystemAudioController.setDefaultInputDevice(builtInID)

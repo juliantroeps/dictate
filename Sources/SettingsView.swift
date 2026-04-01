@@ -85,6 +85,14 @@ struct SettingsView: View {
                     }
                 }
 
+                // Warn when saved device is disconnected - fallback is active
+                if let savedUID = settings.selectedInputDeviceUID,
+                   SystemAudioController.audioDeviceID(forUID: savedUID) == nil {
+                    Text("Saved device not connected - using fallback")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+
                 if !outputDeviceName.isEmpty {
                     HStack {
                         Text("Output").foregroundStyle(.secondary)
