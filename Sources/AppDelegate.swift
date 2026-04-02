@@ -70,6 +70,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Run auto-fallback check now in case BT is already the default at launch
         handleDeviceChanged()
 
+        setupWakeObserver()
+
         keyListener.onKeyDown = { [weak self] in
             self?.handleKeyDown()
         }
@@ -223,6 +225,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 self.observeDeviceSelection()
             }
+        }
+    }
+
+    private func setupWakeObserver() {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.restartKeyListener()
+            }
+        }
+    }
+
+    private func restartKeyListener() {
+        keyListener.stop()
+        if keyListener.start() {
+            print("[dictate] Key listener restarted after wake")
+        } else {
+            print("[dictate] Key listener restart failed after wake")
         }
     }
 
