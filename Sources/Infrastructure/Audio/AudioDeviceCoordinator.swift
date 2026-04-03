@@ -86,14 +86,14 @@ final class AudioDeviceCoordinator {
 
     func handleAudioCaptureEvent(_ event: AudioCaptureEvent) {
         switch event {
-        case .inputConfigurationChanged(let stable):
-            handleInputConfigurationChanged(stable: stable)
+        case .inputConfigurationChanged:
+            handleInputConfigurationChanged()
         case .audioLevel, .recordingInterrupted:
             break
         }
     }
 
-    func handleInputConfigurationChanged(stable _: Bool = true) {
+    func handleInputConfigurationChanged() {
         guard let defaultID = audioDevices.defaultInputDeviceID() else { return }
 
         let selectedUID = settings.selectedInputDeviceUID
