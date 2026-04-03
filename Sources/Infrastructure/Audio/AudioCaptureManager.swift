@@ -175,6 +175,14 @@ final class AudioCaptureManager: @unchecked Sendable {
         }
     }
 
+    private func captureBuffer() -> [Float] {
+        bufferLock.lock()
+        let captured = buffer
+        buffer.removeAll(keepingCapacity: true)
+        bufferLock.unlock()
+        return captured
+    }
+
     func stopRecording() -> [Float] {
         guard isRecording else { return [] }
         isRecording = false
@@ -257,9 +265,10 @@ final class AudioCaptureManager: @unchecked Sendable {
         converterLock.withLock { converter = nil }
         resetGeneration += 1
         if isRecording {
-            AppLogger.audio.debug("Audio config changed during recording")
+            let captured = captureBuffer()
+            AppLogger.audio.debug("Audio config changed during recording, captured \(captured.count) samples")
             isRecording = false
-            onEvent?(.recordingInterrupted)
+            onEvent?(.recordingInterrupted(samples: captured))
         }
 
         // Debounce: coalesce rapid config changes (BT connect fires many).

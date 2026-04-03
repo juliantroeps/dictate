@@ -68,8 +68,8 @@ final class DictationCoordinator {
         case .audioLevel(let level):
             runtimeState.audioLevel = level
             overlay.state.audioLevel = level
-        case .recordingInterrupted:
-            handleRecordingInterrupted()
+        case .recordingInterrupted(let samples):
+            handleRecordingInterrupted(samples: samples)
         case .inputConfigurationChanged:
             break
         }
@@ -198,7 +198,7 @@ final class DictationCoordinator {
         runtimeState.transcriptionTask = task
     }
 
-    func handleRecordingInterrupted() {
+    func handleRecordingInterrupted(samples: [Float]) {
         if settings.muteSystemAudio {
             setMuted(false)
         }
@@ -208,8 +208,76 @@ final class DictationCoordinator {
         runtimeState.recordingStartTask = nil
         runtimeState.transcriptionTask?.cancel()
         runtimeState.transcriptionTask = nil
-        setPhase(.idle)
-        overlay.hide()
+
+        let minSamples = Int(settings.minHoldDuration * 16000)
+        guard samples.count >= minSamples else {
+            AppLogger.transcription.debug("Interrupted recording too short: \(samples.count) < \(minSamples) samples")
+            setPhase(.idle)
+            overlay.hide()
+            return
+        }
+
+        guard engineCoordinator.isReady else {
+            AppLogger.transcription.info("Engine not ready during interruption, discarding audio")
+            setPhase(.idle)
+            overlay.hide()
+            return
+        }
+
+        let duration = Double(samples.count) / 16_000.0
+        AppLogger.audio.info("Transcribing interrupted recording: \(samples.count) samples (\(String(format: "%.1f", duration))s)")
+
+        setPhase(.processing)
+
+        let engineCoordinator = self.engineCoordinator
+        let settings = self.settings
+        let overlay = self.overlay
+        let injectText = self.injectText
+        let runtimeState = self.runtimeState
+        let transcriptionTimeout = self.transcriptionTimeout
+        let task = Task { @MainActor in
+            defer { runtimeState.transcriptionTask = nil }
+
+            do {
+                let text = try await withThrowingTaskGroup(of: String.self) { group in
+                    group.addTask {
+                        try await engineCoordinator.transcribe(audioSamples: samples)
+                    }
+                    group.addTask {
+                        try await Task.sleep(for: transcriptionTimeout)
+                        throw TranscriptionError.timeout
+                    }
+                    let result = try await group.next()!
+                    group.cancelAll()
+                    return result
+                }
+
+                guard !Task.isCancelled, !text.isEmpty else {
+                    setPhase(.idle)
+                    overlay.hide()
+                    return
+                }
+
+                let result = injectText(text)
+                if settings.noFocusBehavior == .discard, result == .copiedToClipboard {
+                    NSPasteboard.general.clearContents()
+                }
+                AppLogger.input.info("Injected interrupted dictation using \(result)")
+                setPhase(.idle)
+                overlay.hide()
+            } catch is CancellationError {
+                AppLogger.transcription.info("Interrupted transcription cancelled")
+                setPhase(.idle)
+                overlay.hide()
+            } catch TranscriptionError.timeout {
+                AppLogger.transcription.warning("Interrupted transcription timed out")
+                overlay.showError("Transcription timed out", duration: 2.0)
+            } catch {
+                AppLogger.transcription.error("Interrupted transcription failed: \(error)")
+                overlay.showError("Transcription failed", duration: 2.0)
+            }
+        }
+        runtimeState.transcriptionTask = task
     }
 
     private func setPhase(_ phase: RecordingPhase) {
