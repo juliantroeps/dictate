@@ -25,6 +25,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           dry_run: true
           default_bump: false
+          custom_release_rules: refactor:minor,perf:patch,style:patch
 
       - name: Cache Swift packages
         if: steps.semver.outputs.new_version != ''
