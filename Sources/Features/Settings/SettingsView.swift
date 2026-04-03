@@ -14,7 +14,6 @@ struct SettingsView: View {
 
     private let models: [ModelOption] = [
         .init(id: "openai_whisper-tiny.en", label: "tiny.en", memory: "~75 MB"),
-        // ("openai_whisper-base.en", "base.en", "~150 MB"),
         .init(id: "openai_whisper-small.en", label: "small.en", memory: "~500 MB"),
         .init(id: "openai_whisper-medium.en", label: "medium.en", memory: "~1.5 GB"),
     ]
