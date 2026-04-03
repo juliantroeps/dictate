@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let audioCapture = AudioCaptureManager()
     private let overlay = OverlayController()
     private let settings = Settings.shared
+    private let audioDevicePolicy = AudioDevicePolicy()
     private var engine: TranscriptionEngine
     private var permissionTimer: Timer?
     private var keyDownTime: DispatchTime?
@@ -62,7 +63,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Apply saved device selection + observe changes
         if let uid = settings.selectedInputDeviceUID,
-           let deviceID = SystemAudioController.audioDeviceID(forUID: uid) {
+            let deviceID = SystemAudioController.audioDeviceID(forUID: uid)
+        {
             SystemAudioController.setDefaultInputDevice(deviceID)
         }
         observeDeviceSelection()
@@ -217,7 +219,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 guard let self else { return }
                 if let uid = self.settings.selectedInputDeviceUID,
-                   let deviceID = SystemAudioController.audioDeviceID(forUID: uid) {
+                    let deviceID = SystemAudioController.audioDeviceID(forUID: uid)
+                {
                     SystemAudioController.setDefaultInputDevice(deviceID)
                 } else {
                     // Switched to Automatic - run fallback check
@@ -259,33 +262,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleDeviceChanged() {
         guard let defaultID = SystemAudioController.defaultInputDeviceID else { return }
 
-        // Manual selection: re-apply on every device change
-        if let uid = settings.selectedInputDeviceUID,
-           let resolvedID = SystemAudioController.audioDeviceID(forUID: uid),
-           resolvedID != defaultID {
-            SystemAudioController.setDefaultInputDevice(resolvedID)
-            print("[dictate] Re-applied manual selection: \(uid)")
-            return
-        }
+        let selectedUID = settings.selectedInputDeviceUID
+        let resolvedSelectedID = selectedUID.flatMap { SystemAudioController.audioDeviceID(forUID: $0) }
 
-        // Auto-fallback: BT is system default and no valid manual override
-        // Treat unresolved UID (disconnected device) same as "Automatic" for fallback
-        let hasValidManualSelection = settings.selectedInputDeviceUID.flatMap {
-            SystemAudioController.audioDeviceID(forUID: $0)
-        } != nil
-        if !hasValidManualSelection,
-           SystemAudioController.isDeviceBluetooth(defaultID),
-           let builtInID = SystemAudioController.builtInInputDeviceID {
+        switch audioDevicePolicy.action(
+            for: .init(
+                selectedInputDeviceUID: selectedUID,
+                resolvedSelectedInputID: resolvedSelectedID,
+                defaultInputID: defaultID,
+                builtInInputID: SystemAudioController.builtInInputDeviceID,
+                defaultInputIsBluetooth: SystemAudioController.isDeviceBluetooth(defaultID)
+            )
+        ) {
+        case .applyManualSelection(let resolvedID):
+            SystemAudioController.setDefaultInputDevice(resolvedID)
+            print("[dictate] Re-applied manual selection: \(selectedUID ?? "unknown")")
+            return
+        case .fallbackToBuiltIn(let builtInID):
             SystemAudioController.setDefaultInputDevice(builtInID)
             print("[dictate] Auto-fallback: set system default to built-in mic")
             return
+        case .keepCurrent:
+            break
         }
 
         // Show device notification (not during recording/processing)
         guard case .idle = overlay.state.phase else { return }
         let activeName: String
-        if let uid = settings.selectedInputDeviceUID,
-           let resolvedID = SystemAudioController.audioDeviceID(forUID: uid) {
+        if let resolvedID = resolvedSelectedID {
             activeName = SystemAudioController.deviceName(for: resolvedID) ?? "Selected mic"
         } else {
             activeName = SystemAudioController.defaultInputDeviceName ?? "Unknown mic"

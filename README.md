@@ -1,6 +1,6 @@
 # dictate
 
-A macOS menu bar app that transcribes your voice and injects the result directly into any text field — system-wide and on-device.
+A macOS menu bar app that transcribes your voice and injects the result directly into any text field - system-wide and on-device.
 
 Hold **Fn / Globe**, speak, release. Text appears at the cursor.
 
@@ -10,7 +10,7 @@ Transcription runs entirely on-device via [WhisperKit](https://github.com/argmax
 
 - Hold-to-record from anywhere
 - On-device transcription (Whisper tiny/base/small/medium)
-- Smart text injection — works in browsers, terminals, Electron apps, and native apps
+- Smart text injection - works in browsers, terminals, Electron apps, and native apps
 - System audio mute while recording
 - Customizable vocabulary hints for domain-specific terminology
 - Menu bar settings UI
@@ -60,6 +60,14 @@ swift build
 
 SPM fetches WhisperKit and dependencies automatically. First build takes a while.
 
+### Validate
+
+```sh
+./scripts/check.sh
+```
+
+The script runs `swift build`, `swift test`, `swiftlint lint --strict`, and `swift-format lint --configuration .swiftformat -r Sources Tests` when the tools are installed.
+
 ### Run
 
 ```sh
@@ -70,11 +78,11 @@ SPM fetches WhisperKit and dependencies automatically. First build takes a while
 
 Two permissions are required on first launch:
 
-**Accessibility** — for the global Fn key listener (CGEventTap) and text injection via the Accessibility API.
+**Accessibility** - for the global Fn key listener (CGEventTap) and text injection via the Accessibility API.
 Grant to the *terminal* launching the binary (Terminal.app, iTerm2, etc.), not to the binary itself.
 Go to **System Settings → Privacy & Security → Accessibility** and enable the entry.
 
-**Microphone** — requested automatically on launch.
+**Microphone** - requested automatically on launch.
 
 ## Settings
 
@@ -89,6 +97,18 @@ Click the mic icon in the menu bar to open settings.
 
 
 Model files are downloaded by WhisperKit and cached in `~/Library/Caches/`.
+
+### Source layout
+
+`Sources/` stays rooted at the package target so the refactor can move code into nested directories without changing the manifest. The planned split is:
+
+- `Sources/App`
+- `Sources/Features`
+- `Sources/Infrastructure`
+- `Sources/UI`
+- `Sources/Support`
+
+`Tests/` now holds the unit-test target that exercises shared policy and utility code.
 
 ## Vocabulary hints
 
@@ -122,4 +142,4 @@ VERSION=0.2.0 scripts/package.sh
 scripts/tag-release.sh
 ```
 
-`tag-release.sh` commits the version bump, creates a git tag, pushes, and — if `gh` is installed and authenticated — creates a GitHub release and uploads the dmg file.
+`tag-release.sh` commits the version bump, creates a git tag, pushes, and - if `gh` is installed and authenticated - creates a GitHub release and uploads the dmg file.

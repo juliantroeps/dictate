@@ -1,0 +1,25 @@
+included:
+  - Sources
+  - Tests
+
+excluded:
+  - .build
+  - dist
+  - Resources
+  - thoughts
+  - .github
+
+disabled_rules:
+  - line_length
+  - file_length
+  - type_body_length
+  - function_body_length
+  - cyclomatic_complexity
+  - force_cast
+  - force_try
+  - force_unwrapping
+  - implicitly_unwrapped_optional
+  - identifier_name
+  - type_name
+  - nesting
+  - todo

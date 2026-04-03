@@ -17,10 +17,14 @@ enum PromptProvider {
         """
 
     static func resolve() -> String {
-        if let fileContents = try? String(contentsOf: promptFilePath, encoding: .utf8) {
+        resolve(from: promptFilePath)
+    }
+
+    static func resolve(from promptURL: URL) -> String {
+        if let fileContents = try? String(contentsOf: promptURL, encoding: .utf8) {
             let trimmed = fileContents.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
-                print("[dictate] Using custom prompt from \(promptFilePath.path)")
+                print("[dictate] Using custom prompt from \(promptURL.path)")
                 return trimmed
             }
         }
