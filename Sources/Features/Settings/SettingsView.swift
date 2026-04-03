@@ -2,15 +2,21 @@ import CoreAudio
 import SwiftUI
 
 struct SettingsView: View {
+    struct ModelOption {
+        let id: String
+        let label: String
+        let memory: String
+    }
+
     private let settings = Settings.shared
     private let engineRuntimeState: DictationRuntimeState
     @StateObject private var refreshController = SettingsRefreshController()
 
-    private let models: [(id: String, label: String, memory: String)] = [
-        ("openai_whisper-tiny.en", "tiny.en", "~75 MB"),
+    private let models: [ModelOption] = [
+        .init(id: "openai_whisper-tiny.en", label: "tiny.en", memory: "~75 MB"),
         // ("openai_whisper-base.en", "base.en", "~150 MB"),
-        ("openai_whisper-small.en", "small.en", "~500 MB"),
-        ("openai_whisper-medium.en", "medium.en", "~1.5 GB"),
+        .init(id: "openai_whisper-small.en", label: "small.en", memory: "~500 MB"),
+        .init(id: "openai_whisper-medium.en", label: "medium.en", memory: "~1.5 GB"),
     ]
 
     init(engineRuntimeState: DictationRuntimeState) {

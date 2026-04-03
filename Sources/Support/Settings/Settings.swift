@@ -63,8 +63,8 @@ final class Settings {
 }
 
 enum NoFocusBehavior: String, CaseIterable {
-    case discard = "discard"
-    case clipboard = "clipboard"
+    case discard
+    case clipboard
 
     var label: String {
         switch self {

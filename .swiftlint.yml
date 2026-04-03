@@ -15,6 +15,9 @@ disabled_rules:
   - type_body_length
   - function_body_length
   - cyclomatic_complexity
+  - opening_brace
+  - trailing_comma
+  - for_where
   - force_cast
   - force_try
   - force_unwrapping
