@@ -21,9 +21,7 @@ final class AudioCaptureManager: @unchecked Sendable {
     private var configChangeTimer: DispatchWorkItem?
     private var primeStopTimer: DispatchWorkItem?
 
-    var onAudioLevel: ((Float) -> Void)?
-    var onRecordingInterrupted: (() -> Void)?
-    var onDeviceChanged: (() -> Void)?
+    var onEvent: ((AudioCaptureEvent) -> Void)?
 
     init() {
         setupEngineObserver()
@@ -236,7 +234,7 @@ final class AudioCaptureManager: @unchecked Sendable {
         for sample in samples { sumOfSquares += sample * sample }
         let rms = sqrt(sumOfSquares / max(Float(samples.count), 1))
         let normalizedLevel = min(rms * 12, 1.0)
-        onAudioLevel?(normalizedLevel)
+        onEvent?(.audioLevel(normalizedLevel))
 
         bufferLock.lock()
         buffer.append(contentsOf: samples)
@@ -258,7 +256,7 @@ final class AudioCaptureManager: @unchecked Sendable {
         if isRecording {
             print("[dictate] Audio config changed during recording")
             isRecording = false
-            onRecordingInterrupted?()
+            onEvent?(.recordingInterrupted)
         }
 
         // Debounce: coalesce rapid config changes (BT connect fires many).
@@ -273,7 +271,7 @@ final class AudioCaptureManager: @unchecked Sendable {
                 if !stable {
                     print("[dictate] Format unstable after settling")
                 }
-                self.onDeviceChanged?()
+                self.onEvent?(.inputConfigurationChanged(stable: stable))
             }
         }
         configChangeTimer = work

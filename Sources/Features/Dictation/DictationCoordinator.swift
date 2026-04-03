@@ -2,8 +2,7 @@ import AppKit
 import Foundation
 
 protocol AudioCapturing: AnyObject, Sendable {
-    var onAudioLevel: ((Float) -> Void)? { get set }
-    var onRecordingInterrupted: (() -> Void)? { get set }
+    var onEvent: ((AudioCaptureEvent) -> Void)? { get set }
     func startRecording() async throws
     func stopRecording() -> [Float]
 }
@@ -60,19 +59,17 @@ final class DictationCoordinator {
         self.transcriptionTimeout = transcriptionTimeout
         self.injectText = injectText
         self.setMuted = setMuted
+    }
 
-        self.audioCapture.onAudioLevel = { [weak self] level in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.runtimeState.audioLevel = level
-                self.overlay.state.audioLevel = level
-            }
-        }
-
-        self.audioCapture.onRecordingInterrupted = { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.handleRecordingInterrupted()
-            }
+    func handleAudioCaptureEvent(_ event: AudioCaptureEvent) {
+        switch event {
+        case .audioLevel(let level):
+            runtimeState.audioLevel = level
+            overlay.state.audioLevel = level
+        case .recordingInterrupted:
+            handleRecordingInterrupted()
+        case .inputConfigurationChanged:
+            break
         }
     }
 

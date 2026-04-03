@@ -10,8 +10,7 @@ final class FakeDictationSettings: DictationSettingsProviding {
 }
 
 final class FakeAudioCaptureManager: AudioCapturing, @unchecked Sendable {
-    var onAudioLevel: ((Float) -> Void)?
-    var onRecordingInterrupted: (() -> Void)?
+    var onEvent: ((AudioCaptureEvent) -> Void)?
     var startRecordingCalls = 0
     var stopRecordingCalls = 0
     var capturedSamples: [Float] = [0.1, 0.2, 0.3]
@@ -31,6 +30,10 @@ final class FakeAudioCaptureManager: AudioCapturing, @unchecked Sendable {
     func stopRecording() -> [Float] {
         stopRecordingCalls += 1
         return capturedSamples
+    }
+
+    func send(_ event: AudioCaptureEvent) {
+        onEvent?(event)
     }
 }
 

@@ -9,7 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let audioCapture = AudioCaptureManager()
     private let overlay = OverlayController()
     private let settings = Settings.shared
-    private let audioDevicePolicy = AudioDevicePolicy()
+    private lazy var audioDeviceCoordinator = AudioDeviceCoordinator(settings: settings, overlay: overlay)
     private lazy var engineCoordinator = EngineCoordinator(settings: settings, overlay: overlay)
     private lazy var dictationCoordinator = DictationCoordinator(
         audioCapture: audioCapture,
@@ -36,21 +36,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MicrophonePermission.requestInBackground()
 
         engineCoordinator.prepare()
+        audioDeviceCoordinator.applyStartupSelectionIfNeeded()
+        audioDeviceCoordinator.handleInputConfigurationChanged()
+        audioDeviceCoordinator.observeSelectionChanges()
         observeModelChange()
-
-        audioCapture.onDeviceChanged = { [weak self] in
-            DispatchQueue.main.async {
-                self?.handleDeviceChanged()
+        audioCapture.onEvent = { [weak self] event in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.dictationCoordinator.handleAudioCaptureEvent(event)
+                self.audioDeviceCoordinator.handleAudioCaptureEvent(event)
             }
         }
-
-        if let uid = settings.selectedInputDeviceUID,
-            let deviceID = SystemAudioController.audioDeviceID(forUID: uid)
-        {
-            SystemAudioController.setDefaultInputDevice(deviceID)
-        }
-        observeDeviceSelection()
-        handleDeviceChanged()
 
         setupWakeObserver()
 
@@ -89,24 +85,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func observeDeviceSelection() {
-        withObservationTracking {
-            _ = settings.selectedInputDeviceUID
-        } onChange: { [weak self] in
-            Task { @MainActor in
-                guard let self else { return }
-                if let uid = self.settings.selectedInputDeviceUID,
-                    let deviceID = SystemAudioController.audioDeviceID(forUID: uid)
-                {
-                    SystemAudioController.setDefaultInputDevice(deviceID)
-                } else {
-                    self.handleDeviceChanged()
-                }
-                self.observeDeviceSelection()
-            }
-        }
-    }
-
     private func setupWakeObserver() {
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
@@ -126,43 +104,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             print("[dictate] Key listener restart failed after wake")
         }
-    }
-
-    private func handleDeviceChanged() {
-        guard let defaultID = SystemAudioController.defaultInputDeviceID else { return }
-
-        let selectedUID = settings.selectedInputDeviceUID
-        let resolvedSelectedID = selectedUID.flatMap { SystemAudioController.audioDeviceID(forUID: $0) }
-
-        switch audioDevicePolicy.action(
-            for: .init(
-                selectedInputDeviceUID: selectedUID,
-                resolvedSelectedInputID: resolvedSelectedID,
-                defaultInputID: defaultID,
-                builtInInputID: SystemAudioController.builtInInputDeviceID,
-                defaultInputIsBluetooth: SystemAudioController.isDeviceBluetooth(defaultID)
-            )
-        ) {
-        case .applyManualSelection(let resolvedID):
-            SystemAudioController.setDefaultInputDevice(resolvedID)
-            print("[dictate] Re-applied manual selection: \(selectedUID ?? "unknown")")
-            return
-        case .fallbackToBuiltIn(let builtInID):
-            SystemAudioController.setDefaultInputDevice(builtInID)
-            print("[dictate] Auto-fallback: set system default to built-in mic")
-            return
-        case .keepCurrent:
-            break
-        }
-
-        guard case .idle = overlay.state.phase else { return }
-        let activeName: String
-        if let resolvedID = resolvedSelectedID {
-            activeName = SystemAudioController.deviceName(for: resolvedID) ?? "Selected mic"
-        } else {
-            activeName = SystemAudioController.defaultInputDeviceName ?? "Unknown mic"
-        }
-        overlay.showInfo(activeName, duration: 2.0)
     }
 
     @objc private func togglePopover() {
