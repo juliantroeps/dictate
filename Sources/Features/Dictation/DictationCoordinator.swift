@@ -39,13 +39,14 @@ final class DictationCoordinator {
     private let transcriptionTimeout: Duration
     private let injectText: @MainActor (String) -> TextInjector.Result
     private let setMuted: (Bool) -> Void
-    let runtimeState = DictationRuntimeState()
+    let runtimeState: DictationRuntimeState
 
     init(
         audioCapture: any AudioCapturing = AudioCaptureManager(),
         overlay: any OverlayControlling = OverlayController(),
         engineCoordinator: any TranscriptionEngineCoordinating = EngineCoordinator(),
         settings: any DictationSettingsProviding = Settings.shared,
+        runtimeState: DictationRuntimeState = DictationRuntimeState(),
         now: @escaping () -> DispatchTime = DispatchTime.now,
         transcriptionTimeout: Duration = .seconds(30),
         injectText: @escaping @MainActor (String) -> TextInjector.Result = TextInjector.inject,
@@ -55,6 +56,7 @@ final class DictationCoordinator {
         self.overlay = overlay
         self.engineCoordinator = engineCoordinator
         self.settings = settings
+        self.runtimeState = runtimeState
         self.now = now
         self.transcriptionTimeout = transcriptionTimeout
         self.injectText = injectText
@@ -101,7 +103,7 @@ final class DictationCoordinator {
             } catch is CancellationError {
                 return
             } catch {
-                print("[dictate] Failed to start recording: \(error)")
+                AppLogger.audio.error("Failed to start recording: \(error)")
                 self.setPhase(.idle)
                 self.overlay.hide()
             }
@@ -136,10 +138,10 @@ final class DictationCoordinator {
 
         setPhase(.processing)
         let duration = Double(samples.count) / 16_000.0
-        print("[dictate] Audio ready: \(samples.count) samples (\(String(format: "%.1f", duration))s)")
+        AppLogger.audio.info("Captured \(samples.count) samples (\(String(format: "%.1f", duration))s)")
 
         guard engineCoordinator.isReady else {
-            print("[dictate] Engine not ready, attempting preparation")
+            AppLogger.transcription.info("Engine not ready, attempting preparation")
             overlay.showError("Model loading...", duration: 2.0)
             engineCoordinator.prepare(attempts: 1)
             return
@@ -178,18 +180,18 @@ final class DictationCoordinator {
                 if settings.noFocusBehavior == .discard, result == .copiedToClipboard {
                     NSPasteboard.general.clearContents()
                 }
-                print("[dictate] Injected (\(result)): \(text)")
+                AppLogger.input.info("Injected dictated text using \(result)")
                 setPhase(.idle)
                 overlay.hide()
             } catch is CancellationError {
-                print("[dictate] Transcription cancelled")
+                AppLogger.transcription.info("Transcription cancelled")
                 setPhase(.idle)
                 overlay.hide()
             } catch TranscriptionError.timeout {
-                print("[dictate] Transcription timed out")
+                AppLogger.transcription.warning("Transcription timed out")
                 overlay.showError("Transcription timed out", duration: 2.0)
             } catch {
-                print("[dictate] Transcription failed: \(error)")
+                AppLogger.transcription.error("Transcription failed: \(error)")
                 overlay.showError("Transcription failed", duration: 2.0)
             }
         }

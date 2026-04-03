@@ -110,11 +110,11 @@ final class AudioDeviceCoordinator {
         ) {
         case .applyManualSelection(let resolvedID):
             audioDevices.setDefaultInputDevice(resolvedID)
-            print("[dictate] Re-applied manual selection: \(selectedUID ?? "unknown")")
+            AppLogger.device.info("Re-applied manual selection: \(selectedUID ?? "unknown")")
             return
         case .fallbackToBuiltIn(let builtInID):
             audioDevices.setDefaultInputDevice(builtInID)
-            print("[dictate] Auto-fallback: set system default to built-in mic")
+            AppLogger.device.info("Auto-fallback: set system default to built-in mic")
             return
         case .keepCurrent:
             break

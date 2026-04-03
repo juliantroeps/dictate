@@ -2,11 +2,10 @@
 import AppKit
 
 enum TextInjector {
-
     enum Result: Equatable {
-        case injected          // AX selectedText or value write
-        case pasted            // clipboard + Cmd+V fallback
-        case copiedToClipboard // no focused field, text on clipboard
+        case injected
+        case pasted
+        case copiedToClipboard
     }
 
     /// Insert text into the focused text field of the frontmost app.
@@ -18,184 +17,62 @@ enum TextInjector {
             return .copiedToClipboard
         }
 
-        guard let (focused, role) = focusedElement(for: frontApp) else {
-            print("[dictate] TextInjector: no focused text element, trying clipboard paste")
+        guard let focused = FocusedTextElementLocator.focusedElement(for: frontApp) else {
+            AppLogger.input.debug("No focused text element, using \(TextInjectionStrategy.clipboardPaste.rawValue)")
             pasteViaClipboard(text)
             return .pasted
         }
 
-        print("[dictate] TextInjector: focused element role=\(role)")
+        AppLogger.input.debug("Focused element role=\(focused.role)")
 
-        // Web areas (browsers): AX attribute writes are unreliable → clipboard paste.
-        // The focused element itself is usually a child of AXWebArea, so check ancestors too.
-        if role == "AXWebArea" || isInsideWebArea(focused) {
-            print("[dictate] TextInjector: web content detected, using clipboard paste")
+        if focused.role == "AXWebArea" || FocusedTextElementLocator.isInsideWebArea(focused.element) {
+            AppLogger.input.debug("Web content detected, using \(TextInjectionStrategy.clipboardPaste.rawValue)")
             pasteViaClipboard(text)
             return .pasted
         }
 
-        // Strategy 1: Set AXSelectedText, then verify cursor actually advanced.
-        // Some apps (terminal emulators) return success but silently discard the write.
-        let beforeRange = selectedTextRange(of: focused)
+        let beforeRange = FocusedTextElementLocator.selectedTextRange(of: focused.element)
         let axResult = AXUIElementSetAttributeValue(
-            focused,
+            focused.element,
             kAXSelectedTextAttribute as CFString,
             text as CFTypeRef
         )
         if axResult == .success {
             if let before = beforeRange {
-                let after = selectedTextRange(of: focused)
+                let after = FocusedTextElementLocator.selectedTextRange(of: focused.element)
                 if after?.location == before.location + text.utf16.count && after?.length == 0 {
+                    AppLogger.input.info("Text injected using \(TextInjectionStrategy.accessibilityWrite.rawValue)")
                     return .injected
                 }
-                print("[dictate] TextInjector: Strategy 1 silently failed (cursor didn't advance), falling through")
+                AppLogger.input.debug("Accessibility write did not advance the cursor, falling through")
             } else {
-                return .injected  // can't verify, trust the return value
+                AppLogger.input.info("Text injected using \(TextInjectionStrategy.accessibilityWrite.rawValue)")
+                return .injected
             }
         }
 
-        // Strategy 2: Read AXValue + AXSelectedTextRange, splice, write back
-        if insertViaValueSplice(element: focused, text: text) {
-            print("[dictate] TextInjector: Strategy 2 (value-splice) succeeded")
+        if ValueSpliceInjector.inject(element: focused.element, text: text) {
+            AppLogger.input.info("Text injected using \(TextInjectionStrategy.valueSplice.rawValue)")
             return .injected
         }
 
-        // Strategy 3: Clipboard + Cmd+V
-        print("[dictate] TextInjector: falling back to clipboard paste")
+        AppLogger.input.debug("Falling back to \(TextInjectionStrategy.clipboardPaste.rawValue)")
         pasteViaClipboard(text)
         return .pasted
     }
 
-    // MARK: - Helpers
-
-    private static func selectedTextRange(of element: AXUIElement) -> CFRange? {
-        var rangeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success else { return nil }
-        var range = CFRange(location: 0, length: 0)
-        guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &range) else { return nil }
-        return range
-    }
-
-    // MARK: - Web Area Detection
-
-    /// Returns true if the element is nested inside an AXWebArea (browser web content).
-    private static func isInsideWebArea(_ element: AXUIElement) -> Bool {
-        var current = element
-        for _ in 0..<20 {
-            var parentRef: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(current, kAXParentAttribute as CFString, &parentRef) == .success,
-                  let parent = parentRef else { break }
-            let axParent = parent as! AXUIElement
-            var roleRef: CFTypeRef?
-            AXUIElementCopyAttributeValue(axParent, kAXRoleAttribute as CFString, &roleRef)
-            if (roleRef as? String) == "AXWebArea" { return true }
-            current = axParent
-        }
-        return false
-    }
-
-    // MARK: - Focused Element
-
-    private static func focusedElement(for frontApp: NSRunningApplication) -> (AXUIElement, String)? {
-        let appRef = AXUIElementCreateApplication(frontApp.processIdentifier)
-
-        var focusedValue: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(
-            appRef,
-            kAXFocusedUIElementAttribute as CFString,
-            &focusedValue
-        )
-        guard result == .success, let element = focusedValue else {
-            print("[dictate] TextInjector: no focused UI element (app=\(frontApp.localizedName ?? "?"))")
-            return nil
-        }
-
-        let axElement = element as! AXUIElement
-
-        var roleValue: CFTypeRef?
-        AXUIElementCopyAttributeValue(axElement, kAXRoleAttribute as CFString, &roleValue)
-        let role = (roleValue as? String) ?? "unknown"
-
-        let textRoles: Set<String> = [
-            kAXTextFieldRole as String, kAXTextAreaRole as String, kAXComboBoxRole as String,
-            "AXSearchField", "AXWebArea",
-        ]
-        if textRoles.contains(role) {
-            return (axElement, role)
-        }
-        // Catch custom editable controls
-        var isSettable: DarwinBoolean = false
-        AXUIElementIsAttributeSettable(axElement, kAXValueAttribute as CFString, &isSettable)
-        if isSettable.boolValue {
-            return (axElement, role)
-        }
-
-        print("[dictate] TextInjector: focused element not a text input (role=\(role))")
-        return nil
-    }
-
-    // MARK: - Strategy 2: Value Splice
-
-    private static func insertViaValueSplice(element: AXUIElement, text: String) -> Bool {
-        var valueRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef) == .success,
-              let currentValue = valueRef as? String else { return false }
-
-        guard let range = selectedTextRange(of: element) else { return false }
-
-        let newValue = (currentValue as NSString).replacingCharacters(
-            in: NSRange(location: range.location, length: range.length),
-            with: text
-        )
-
-        guard AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, newValue as CFTypeRef) == .success else { return false }
-
-        // Reposition cursor to end of inserted text
-        let newCursorPos = range.location + text.utf16.count
-        var newRange = CFRange(location: newCursorPos, length: 0)
-        if let newRangeValue = AXValueCreate(.cfRange, &newRange) {
-            AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, newRangeValue)
-        }
-
-        // Verify the write took effect
-        guard let afterRange = selectedTextRange(of: element),
-              afterRange.location == newCursorPos, afterRange.length == 0 else {
-            print("[dictate] TextInjector: Strategy 2 silently failed (cursor didn't advance), falling through")
-            return false
-        }
-
-        return true
-    }
-
-    // MARK: - Strategy 3: Clipboard Paste
-
+    @MainActor
     private static func pasteViaClipboard(_ text: String) {
         let pasteboard = NSPasteboard.general
-
-        // Save current clipboard contents
-        let savedItems = (pasteboard.pasteboardItems ?? []).map { item -> NSPasteboardItem in
-            let copy = NSPasteboardItem()
-            for type in item.types {
-                if let data = item.data(forType: type) {
-                    copy.setData(data, forType: type)
-                }
-            }
-            return copy
-        }
+        let restorer = ClipboardRestorer(pasteboard: pasteboard)
 
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         simulateCmdV()
-
-        // Restore original clipboard after paste has time to process
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            NSPasteboard.general.clearContents()
-            if !savedItems.isEmpty {
-                NSPasteboard.general.writeObjects(savedItems)
-            }
-        }
+        restorer.restore()
     }
 
+    @MainActor
     private static func copyToClipboard(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)

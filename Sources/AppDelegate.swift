@@ -9,13 +9,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let audioCapture = AudioCaptureManager()
     private let overlay = OverlayController()
     private let settings = Settings.shared
+    private let runtimeState = DictationRuntimeState()
     private lazy var audioDeviceCoordinator = AudioDeviceCoordinator(settings: settings, overlay: overlay)
-    private lazy var engineCoordinator = EngineCoordinator(settings: settings, overlay: overlay)
+    private lazy var engineCoordinator = EngineCoordinator(settings: settings, overlay: overlay, runtimeState: runtimeState)
     private lazy var dictationCoordinator = DictationCoordinator(
         audioCapture: audioCapture,
         overlay: overlay,
         engineCoordinator: engineCoordinator,
-        settings: settings
+        settings: settings,
+        runtimeState: runtimeState
     )
     private var permissionTimer: Timer?
     private var eventMonitor: Any?
@@ -29,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.target = self
         }
 
-        popover.contentViewController = NSHostingController(rootView: SettingsView())
+        popover.contentViewController = NSHostingController(rootView: SettingsView(engineRuntimeState: runtimeState))
         popover.behavior = .transient
 
         AccessibilityPermission.requestIfNeeded()
@@ -100,9 +102,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func restartKeyListener() {
         keyListener.stop()
         if keyListener.start() {
-            print("[dictate] Key listener restarted after wake")
+            AppLogger.app.info("Key listener restarted after wake")
         } else {
-            print("[dictate] Key listener restart failed after wake")
+            AppLogger.app.error("Key listener restart failed after wake")
         }
     }
 

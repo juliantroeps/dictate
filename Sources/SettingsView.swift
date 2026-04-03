@@ -3,14 +3,19 @@ import SwiftUI
 
 struct SettingsView: View {
     private let settings = Settings.shared
+    private let engineRuntimeState: DictationRuntimeState
     @StateObject private var refreshController = SettingsRefreshController()
 
     private let models: [(id: String, label: String, memory: String)] = [
         ("openai_whisper-tiny.en", "tiny.en", "~75 MB"),
-        ("openai_whisper-base.en", "base.en", "~150 MB"),
+        // ("openai_whisper-base.en", "base.en", "~150 MB"),
         ("openai_whisper-small.en", "small.en", "~500 MB"),
         ("openai_whisper-medium.en", "medium.en", "~1.5 GB"),
     ]
+
+    init(engineRuntimeState: DictationRuntimeState) {
+        self.engineRuntimeState = engineRuntimeState
+    }
 
     var body: some View {
         VStack(spacing: 12) {
@@ -32,7 +37,7 @@ struct SettingsView: View {
                     }
                 }
 
-                switch settings.engineState {
+                switch engineRuntimeState.engineStatus {
                 case .loading:
                     HStack(spacing: 4) {
                         ProgressView().controlSize(.small)

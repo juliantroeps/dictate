@@ -24,11 +24,11 @@ enum PromptProvider {
         if let fileContents = try? String(contentsOf: promptURL, encoding: .utf8) {
             let trimmed = fileContents.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
-                print("[dictate] Using custom prompt from \(promptURL.path)")
+                AppLogger.transcription.debug("Using custom prompt file")
                 return trimmed
             }
         }
-        print("[dictate] Using default prompt")
+        AppLogger.transcription.debug("Using default prompt")
         return defaultPrompt
     }
 }

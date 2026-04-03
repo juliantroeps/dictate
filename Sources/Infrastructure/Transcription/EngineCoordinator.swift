@@ -3,7 +3,6 @@ import Foundation
 @MainActor
 protocol EngineSettingsManaging: AnyObject {
     var whisperModel: String { get }
-    var engineState: EngineState { get set }
 }
 
 @MainActor
@@ -21,6 +20,7 @@ extension Settings: EngineSettingsManaging {}
 final class EngineCoordinator: TranscriptionEngineCoordinating {
     private let settings: any EngineSettingsManaging
     private let overlay: any OverlayControlling
+    private let runtimeState: DictationRuntimeState
     private var engine: TranscriptionEngine
     private var loadTask: Task<Void, Never>?
 
@@ -29,10 +29,12 @@ final class EngineCoordinator: TranscriptionEngineCoordinating {
     init(
         settings: any EngineSettingsManaging = Settings.shared,
         overlay: any OverlayControlling = OverlayController(),
+        runtimeState: DictationRuntimeState = DictationRuntimeState(),
         engine: TranscriptionEngine? = nil
     ) {
         self.settings = settings
         self.overlay = overlay
+        self.runtimeState = runtimeState
         self.engine = engine ?? WhisperKitEngine(model: settings.whisperModel)
     }
 
@@ -44,7 +46,7 @@ final class EngineCoordinator: TranscriptionEngineCoordinating {
         loadTask?.cancel()
         engine.unload()
         engine = WhisperKitEngine(model: model)
-        settings.engineState = .loading
+        runtimeState.engineStatus = .loading
         overlay.showModelLoading()
         startLoading(attempts: 1, showLoadingImmediately: true)
     }
@@ -82,23 +84,25 @@ final class EngineCoordinator: TranscriptionEngineCoordinating {
                         self.overlay.hideModelLoading()
                         return
                     }
-                    self.settings.engineState = .ready
+                    self.runtimeState.engineStatus = .ready
                     self.overlay.hideModelLoading()
                     return
                 } catch is CancellationError {
                     self.overlay.hideModelLoading()
                     return
                 } catch {
-                    print("[dictate] Engine setup attempt \(attempt)/\(attempts) failed: \(error)")
+                    AppLogger.transcription.error(
+                        "Engine setup attempt \(attempt)/\(attempts) failed: \(error)"
+                    )
                     if attempt < attempts {
                         try? await Task.sleep(for: .seconds(Double(attempt) * 2))
                     }
                 }
             }
 
-            self.settings.engineState = .failed
+            self.runtimeState.engineStatus = .failed
             self.overlay.hideModelLoading()
-            print("[dictate] Engine setup failed after \(attempts) attempts")
+            AppLogger.transcription.error("Engine setup failed after \(attempts) attempts")
         }
     }
 }

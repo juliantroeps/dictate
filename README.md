@@ -68,6 +68,13 @@ SPM fetches WhisperKit and dependencies automatically. First build takes a while
 
 The script runs `swift build`, `swift test`, `swiftlint lint --strict`, and `swift-format lint --configuration .swiftformat -r Sources Tests` when the tools are installed.
 
+### Code Quality Guardrails
+
+- Keep persisted preferences in `Settings`. Session-only state lives in `DictationRuntimeState` and is owned by the coordinator layer.
+- Use `AppLogger` for diagnostics instead of `print` so log categories and privacy choices stay explicit.
+- Prefer narrow helpers over broad utility types when extracting shared behavior, especially in audio capture and text injection.
+- Run `swift build` and `swift test` for the fast loop, then `./scripts/check.sh` before merging when the lint tools are available.
+
 ### Run
 
 ```sh
