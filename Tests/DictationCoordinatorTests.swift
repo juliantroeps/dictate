@@ -141,7 +141,7 @@ struct DictationCoordinatorTests {
         let task = coordinator.runtimeState.transcriptionTask
         #expect(task != nil)
 
-        coordinator.handleRecordingInterrupted()
+        coordinator.handleRecordingInterrupted(samples: [])
         await task?.value
 
         #expect(muting.values.last == false)
