@@ -2,18 +2,25 @@ import CoreAudio
 import SwiftUI
 
 struct SettingsView: View {
-    private let settings = Settings.shared
-    @State private var accessibilityGranted = AccessibilityPermission.isGranted
-    @State private var microphoneGranted = MicrophonePermission.isGranted
-    @State private var inputDevices: [(id: AudioDeviceID, name: String)] = []
-    @State private var outputDeviceName = SystemAudioController.defaultOutputDeviceName ?? ""
+    struct ModelOption {
+        let id: String
+        let label: String
+        let memory: String
+    }
 
-    private let models: [(id: String, label: String, memory: String)] = [
-        ("openai_whisper-tiny.en", "tiny.en", "~75 MB"),
-        ("openai_whisper-base.en", "base.en", "~150 MB"),
-        ("openai_whisper-small.en", "small.en", "~500 MB"),
-        ("openai_whisper-medium.en", "medium.en", "~1.5 GB"),
+    private let settings = Settings.shared
+    private let engineRuntimeState: DictationRuntimeState
+    @StateObject private var refreshController = SettingsRefreshController()
+
+    private let models: [ModelOption] = [
+        .init(id: "openai_whisper-tiny.en", label: "tiny.en", memory: "~75 MB"),
+        .init(id: "openai_whisper-small.en", label: "small.en", memory: "~500 MB"),
+        .init(id: "openai_whisper-medium.en", label: "medium.en", memory: "~1.5 GB"),
     ]
+
+    init(engineRuntimeState: DictationRuntimeState) {
+        self.engineRuntimeState = engineRuntimeState
+    }
 
     var body: some View {
         VStack(spacing: 12) {
@@ -35,7 +42,7 @@ struct SettingsView: View {
                     }
                 }
 
-                switch settings.engineState {
+                switch engineRuntimeState.engineStatus {
                 case .loading:
                     HStack(spacing: 4) {
                         ProgressView().controlSize(.small)
@@ -66,38 +73,29 @@ struct SettingsView: View {
 
                 Picker("Input", selection: Binding<AudioDeviceID?>(
                     get: {
-                        // Resolve UID to current device ID for picker display
-                        guard let uid = settings.selectedInputDeviceUID else { return nil }
-                        return SystemAudioController.audioDeviceID(forUID: uid)
+                        refreshController.selectedInputDeviceID
                     },
                     set: { (newID: AudioDeviceID?) in
-                        // Store stable UID when user selects a device
-                        if let id = newID {
-                            settings.selectedInputDeviceUID = SystemAudioController.deviceUID(for: id)
-                        } else {
-                            settings.selectedInputDeviceUID = nil
-                        }
+                        refreshController.setSelectedInputDeviceID(newID)
                     }
                 )) {
                     Text("Automatic").tag(AudioDeviceID?.none)
-                    ForEach(inputDevices, id: \.id) { device in
+                    ForEach(refreshController.inputDevices, id: \.id) { device in
                         Text(device.name).tag(Optional(device.id))
                     }
                 }
 
-                // Warn when saved device is disconnected - fallback is active
-                if let savedUID = settings.selectedInputDeviceUID,
-                   SystemAudioController.audioDeviceID(forUID: savedUID) == nil {
+                if refreshController.savedInputDeviceMissing {
                     Text("Saved device not connected - using fallback")
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
 
-                if !outputDeviceName.isEmpty {
+                if !refreshController.outputDeviceName.isEmpty {
                     HStack {
                         Text("Output").foregroundStyle(.secondary)
                         Spacer()
-                        Text(outputDeviceName).foregroundStyle(.secondary)
+                        Text(refreshController.outputDeviceName).foregroundStyle(.secondary)
                     }
                     .font(.caption)
                 }
@@ -123,7 +121,7 @@ struct SettingsView: View {
                 Text("Permissions").font(.subheadline).foregroundStyle(.secondary)
 
                 HStack(spacing: 16) {
-                    if accessibilityGranted {
+                    if refreshController.accessibilityGranted {
                         Label("Accessibility", systemImage: "checkmark.circle.fill")
                             .foregroundColor(.green)
                     } else {
@@ -136,7 +134,7 @@ struct SettingsView: View {
                         .buttonStyle(.plain)
                     }
 
-                    if microphoneGranted {
+                    if refreshController.microphoneGranted {
                         Label("Microphone", systemImage: "checkmark.circle.fill")
                             .foregroundColor(.green)
                     } else {
@@ -159,14 +157,10 @@ struct SettingsView: View {
         .padding()
         .frame(width: 280)
         .onAppear {
-            microphoneGranted = MicrophonePermission.isGranted
-            inputDevices = SystemAudioController.allInputDevices
+            refreshController.start()
         }
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
-            accessibilityGranted = AccessibilityPermission.isGranted
-            microphoneGranted = MicrophonePermission.isGranted
-            inputDevices = SystemAudioController.allInputDevices
-            outputDeviceName = SystemAudioController.defaultOutputDeviceName ?? ""
+        .onDisappear {
+            refreshController.stop()
         }
     }
 }

@@ -7,7 +7,7 @@ enum MicrophonePermission {
 
     static func requestInBackground() {
         AVCaptureDevice.requestAccess(for: .audio) { granted in
-            print("[dictate] Microphone permission: \(granted)")
+            AppLogger.permissions.info("Microphone permission: \(granted)")
         }
     }
 }

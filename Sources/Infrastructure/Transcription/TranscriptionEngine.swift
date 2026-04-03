@@ -27,10 +27,10 @@ final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
 
     func prepare() async throws {
         guard whisperKit == nil else { return }
-        print("[dictate] Loading WhisperKit model: \(model)")
-        let config = WhisperKitConfig(model: model, load: true)
+        AppLogger.transcription.info("Loading WhisperKit model: \(self.model)")
+        let config = WhisperKitConfig(model: self.model, load: true)
         if let cached = cachedModelFolder() {
-            print("[dictate] Using cached model at \(cached)")
+            AppLogger.transcription.debug("Using cached WhisperKit model folder")
             config.modelFolder = cached
         }
         let wk = try await WhisperKit(config)
@@ -41,15 +41,15 @@ final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
             let encoded = tokenizer.encode(text: " " + prompt.trimmingCharacters(in: .whitespaces))
                 .filter { $0 < tokenizer.specialTokens.specialTokenBegin }
             promptTokens = encoded
-            print("[dictate] Prompt encoded: \(encoded.count) tokens")
+            AppLogger.transcription.debug("Prompt encoded: \(encoded.count) tokens")
             if encoded.count > 224 {
-                print("[dictate] WARNING: Prompt exceeds 224 tokens (\(encoded.count)), will be truncated by decoder")
+                AppLogger.transcription.warning("Prompt exceeds 224 tokens and will be truncated by the decoder")
             }
         } else {
-            print("[dictate] WARNING: Tokenizer not available, skipping prompt conditioning")
+            AppLogger.transcription.warning("Tokenizer not available, skipping prompt conditioning")
         }
 
-        print("[dictate] WhisperKit ready")
+        AppLogger.transcription.info("WhisperKit ready")
     }
 
     func unload() {
@@ -81,7 +81,11 @@ final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
         let results = try await wk.transcribe(audioArray: audioSamples, decodeOptions: options)
         let text = results.first?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         #if DEBUG
-        print("[dictate] Transcription result: \(text.isEmpty ? "<empty>" : text)")
+        if text.isEmpty {
+            AppLogger.transcription.debug("Transcription result empty")
+        } else {
+            AppLogger.transcription.debug("Transcription result length=\(text.count)")
+        }
         #endif
         return text
     }

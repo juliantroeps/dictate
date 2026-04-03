@@ -31,8 +31,6 @@ final class Settings {
         }
     }
 
-    var engineState: EngineState = .loading
-
     var launchAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }
         set {
@@ -43,7 +41,7 @@ final class Settings {
                     try SMAppService.mainApp.unregister()
                 }
             } catch {
-                print("[dictate] Launch at login failed: \(error)")
+                AppLogger.settings.error("Launch at login failed: \(error)")
             }
         }
     }
@@ -64,15 +62,9 @@ final class Settings {
     }
 }
 
-enum EngineState {
-    case loading
-    case ready
-    case failed
-}
-
 enum NoFocusBehavior: String, CaseIterable {
-    case discard = "discard"
-    case clipboard = "clipboard"
+    case discard
+    case clipboard
 
     var label: String {
         switch self {

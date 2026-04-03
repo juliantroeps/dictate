@@ -21,9 +21,7 @@ final class AudioCaptureManager: @unchecked Sendable {
     private var configChangeTimer: DispatchWorkItem?
     private var primeStopTimer: DispatchWorkItem?
 
-    var onAudioLevel: ((Float) -> Void)?
-    var onRecordingInterrupted: (() -> Void)?
-    var onDeviceChanged: (() -> Void)?
+    var onEvent: ((AudioCaptureEvent) -> Void)?
 
     init() {
         setupEngineObserver()
@@ -92,6 +90,7 @@ final class AudioCaptureManager: @unchecked Sendable {
         }
         isPriming = true
         schedulePrimeStop()
+        AppLogger.audio.debug("Audio engine primed")
     }
 
     private func schedulePrimeStop() {
@@ -117,7 +116,7 @@ final class AudioCaptureManager: @unchecked Sendable {
             engine.inputNode.removeTap(onBus: 0)
             installRecordingTap()
             isRecording = true
-            print("[dictate] Recording started (primed)")
+            AppLogger.audio.info("Recording started (primed)")
             return
         }
 
@@ -126,7 +125,7 @@ final class AudioCaptureManager: @unchecked Sendable {
             // Wait for settling to finish - engine may be replaced multiple times
             // during this wait, that's fine since we haven't installed taps yet.
             while isSettling {
-                print("[dictate] Audio settling, waiting before attempt \(attempt)")
+                AppLogger.audio.debug("Audio settling, waiting before attempt \(attempt)")
                 try await Task.sleep(for: .milliseconds(300))
             }
 
@@ -138,7 +137,7 @@ final class AudioCaptureManager: @unchecked Sendable {
 
             // Engine reset between tap install and start - retry
             guard resetGeneration == gen else {
-                print("[dictate] Engine reset after tap install, retrying")
+                AppLogger.audio.debug("Engine reset after tap install, retrying")
                 continue
             }
 
@@ -151,12 +150,14 @@ final class AudioCaptureManager: @unchecked Sendable {
             do {
                 try engine.start()
                 isRecording = true
-                print("[dictate] Recording started (attempt \(attempt))")
+                AppLogger.audio.info("Recording started (attempt \(attempt))")
                 return
             } catch {
                 lastError = error
                 engine.inputNode.removeTap(onBus: 0)
-                print("[dictate] engine.start() failed attempt \(attempt): \(error)")
+                AppLogger.audio.error(
+                    "engine.start() failed attempt \(attempt): \(error)"
+                )
                 if attempt < 5 {
                     try await Task.sleep(for: .milliseconds(500))
                 }
@@ -187,7 +188,7 @@ final class AudioCaptureManager: @unchecked Sendable {
         bufferLock.unlock()
 
         let duration = Double(captured.count) / 16_000.0
-        print("[dictate] Captured \(captured.count) samples (\(String(format: "%.1f", duration))s)")
+        AppLogger.audio.info("Captured \(captured.count) samples (\(String(format: "%.1f", duration))s)")
         return captured
     }
 
@@ -222,7 +223,7 @@ final class AudioCaptureManager: @unchecked Sendable {
         }
 
         if let error {
-            print("[dictate] Conversion error: \(error)")
+            AppLogger.audio.error("Conversion error: \(error)")
             return
         }
 
@@ -236,7 +237,7 @@ final class AudioCaptureManager: @unchecked Sendable {
         for sample in samples { sumOfSquares += sample * sample }
         let rms = sqrt(sumOfSquares / max(Float(samples.count), 1))
         let normalizedLevel = min(rms * 12, 1.0)
-        onAudioLevel?(normalizedLevel)
+        onEvent?(.audioLevel(normalizedLevel))
 
         bufferLock.lock()
         buffer.append(contentsOf: samples)
@@ -256,24 +257,24 @@ final class AudioCaptureManager: @unchecked Sendable {
         converterLock.withLock { converter = nil }
         resetGeneration += 1
         if isRecording {
-            print("[dictate] Audio config changed during recording")
+            AppLogger.audio.debug("Audio config changed during recording")
             isRecording = false
-            onRecordingInterrupted?()
+            onEvent?(.recordingInterrupted)
         }
 
         // Debounce: coalesce rapid config changes (BT connect fires many).
         isSettling = true
         configChangeTimer?.cancel()
-        print("[dictate] Config change - settling")
+        AppLogger.audio.debug("Config change - settling")
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.validateFormatStability { [weak self] stable in
                 guard let self else { return }
                 self.isSettling = false
                 if !stable {
-                    print("[dictate] Format unstable after settling")
+                    AppLogger.audio.debug("Format unstable after settling")
                 }
-                self.onDeviceChanged?()
+                self.onEvent?(.inputConfigurationChanged(stable: stable))
             }
         }
         configChangeTimer = work

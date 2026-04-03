@@ -13,6 +13,11 @@ let package = Package(
             name: "dictate",
             dependencies: ["WhisperKit"],
             path: "Sources"
+        ),
+        .testTarget(
+            name: "dictateTests",
+            dependencies: ["dictate"],
+            path: "Tests"
         )
     ]
 )

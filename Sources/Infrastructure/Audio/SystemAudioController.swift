@@ -195,7 +195,7 @@ enum SystemAudioController {
 
         let status = AudioObjectSetPropertyData(deviceID, &address, 0, nil, size, &mute)
         if status != noErr {
-            print("[dictate] Failed to \(muted ? "mute" : "unmute") audio: \(status)")
+            AppLogger.audio.error("Failed to \(muted ? "mute" : "unmute") audio: \(status)")
         }
     }
 }
