@@ -23,6 +23,7 @@ final class EngineCoordinator: TranscriptionEngineCoordinating {
     private let runtimeState: DictationRuntimeState
     private var engine: TranscriptionEngine
     private var loadTask: Task<Void, Never>?
+    private var loadGeneration: Int = 0
 
     var isReady: Bool { engine.isReady }
 
@@ -64,10 +65,16 @@ final class EngineCoordinator: TranscriptionEngineCoordinating {
     private func startLoading(attempts: Int, showLoadingImmediately: Bool) {
         loadTask?.cancel()
         let engine = engine
+        loadGeneration += 1
+        let generation = loadGeneration
 
-        loadTask = Task { @MainActor [weak self] in
+        loadTask = Task { @MainActor [weak self, generation] in
             guard let self else { return }
-            defer { self.loadTask = nil }
+            defer {
+                if self.loadGeneration == generation {
+                    self.loadTask = nil
+                }
+            }
 
             if !showLoadingImmediately {
                 try? await Task.sleep(for: .seconds(1))
@@ -78,6 +85,10 @@ final class EngineCoordinator: TranscriptionEngineCoordinating {
             }
 
             for attempt in 1...attempts {
+                guard !Task.isCancelled else {
+                    self.overlay.hideModelLoading()
+                    return
+                }
                 do {
                     try await engine.prepare()
                     guard !Task.isCancelled else {
