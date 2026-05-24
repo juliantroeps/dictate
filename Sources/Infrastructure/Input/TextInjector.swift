@@ -44,7 +44,12 @@ enum TextInjector {
                     AppLogger.input.info("Text injected using \(TextInjectionStrategy.accessibilityWrite.rawValue)")
                     return .injected
                 }
-                AppLogger.input.debug("Accessibility write did not advance the cursor, falling through")
+                // AX write claimed success but cursor didn't advance - skip value-splice
+                // to avoid double-injection in apps that accept AX writes but have
+                // inconsistent cursor reporting (e.g. Ghostty, some Electron apps)
+                AppLogger.input.debug("AX write succeeded but cursor unchanged, skipping value-splice")
+                pasteViaClipboard(text)
+                return .pasted
             } else {
                 AppLogger.input.info("Text injected using \(TextInjectionStrategy.accessibilityWrite.rawValue)")
                 return .injected
