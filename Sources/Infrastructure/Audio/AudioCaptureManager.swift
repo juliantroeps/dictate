@@ -257,13 +257,26 @@ final class AudioCaptureManager: @unchecked Sendable {
         primeStopTimer?.cancel()
         primeStopTimer = nil
         isPriming = false
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+
+        let oldEngine = engine
+        oldEngine.inputNode.removeTap(onBus: 0)
+        oldEngine.stop()
         // Create new engine - reset() alone doesn't reinitialize for different devices
         engine = AVAudioEngine()
         setupEngineObserver()
         converterLock.withLock { converter = nil }
         resetGeneration += 1
+
+        // Release the old engine off the main thread. -[AVAudioEngine dealloc]
+        // does a synchronous dispatch into AVFAudio's private queue; during a
+        // device transition that queue can be busy, so deallocating it on the
+        // main thread deadlocks the UI (permanent beachball). Handing the last
+        // strong reference to a background queue lets dealloc block there
+        // harmlessly instead.
+        let box = UncheckedSendableBox(oldEngine)
+        DispatchQueue.global(qos: .utility).async {
+            _ = box.value
+        }
         if isRecording {
             let captured = captureBuffer()
             AppLogger.audio.debug("Audio config changed during recording, captured \(captured.count) samples")
@@ -308,4 +321,11 @@ final class AudioCaptureManager: @unchecked Sendable {
 
 enum AudioCaptureError: Error {
     case noInputDevice
+}
+
+/// Carries a non-Sendable value across a concurrency boundary so a deferred
+/// release can run off the main thread under Swift 6 strict concurrency.
+private struct UncheckedSendableBox<T>: @unchecked Sendable {
+    let value: T
+    init(_ value: T) { self.value = value }
 }
