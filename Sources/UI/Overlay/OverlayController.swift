@@ -6,8 +6,29 @@ final class OverlayController {
     let state = OverlayState()
 
     private var window: NSWindow?
+    /// Monotonically-increasing token. Every state-mutating entry point bumps
+    /// this before scheduling any deferred work. Deferred closures (asyncAfter
+    /// auto-hide, fade completion) capture the post-bump value and no-op when
+    /// the stored generation has advanced - i.e. a newer call has superseded them.
+    private var generation = 0
+
+    // Injectable hooks for testing (default to production behaviour).
+    let scheduleAfter: (TimeInterval, @escaping @MainActor () -> Void) -> Void
+    let onOrderOut: (@MainActor () -> Void)?
+
+    init(
+        scheduleAfter: @escaping (TimeInterval, @escaping @MainActor () -> Void) -> Void = { delay, work in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { work() }
+        },
+        onOrderOut: (@MainActor () -> Void)? = nil
+    ) {
+        self.scheduleAfter = scheduleAfter
+        self.onOrderOut = onOrderOut
+    }
 
     func show() {
+        generation += 1
+
         if window == nil { setupWindow() }
         guard let window else { return }
 
@@ -35,34 +56,43 @@ final class OverlayController {
     func showError(_ message: String, duration: TimeInterval = 2.0) {
         state.phase = .error(message)
         show()
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
-            guard case .error = self?.state.phase else { return }
-            self?.state.phase = .idle
-            self?.hide()
+        let g = generation
+        scheduleAfter(duration) { [weak self] in
+            guard let self, self.generation == g else { return }
+            self.state.phase = .idle
+            self.hide()
         }
     }
 
     func showInfo(_ message: String, duration: TimeInterval = 2.0) {
         state.phase = .info(message)
         show()
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
-            guard case .info = self?.state.phase else { return }
-            self?.state.phase = .idle
-            self?.hide()
+        let g = generation
+        scheduleAfter(duration) { [weak self] in
+            guard let self, self.generation == g else { return }
+            self.state.phase = .idle
+            self.hide()
         }
     }
 
     func hide() {
+        generation += 1
+        let g = generation
         guard let window else { return }
 
-        NSAnimationContext.runAnimationGroup({ context in
+        NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.2
             window.animator().alphaValue = 0
-        }, completionHandler: { [weak self] in
-            MainActor.assumeIsolated {
-                self?.window?.orderOut(nil)
+        }
+
+        scheduleAfter(0.2) { [weak self] in
+            guard let self, self.generation == g else { return }
+            if let onOrderOut = self.onOrderOut {
+                onOrderOut()
+            } else {
+                self.window?.orderOut(nil)
             }
-        })
+        }
     }
 
     private func setupWindow() {

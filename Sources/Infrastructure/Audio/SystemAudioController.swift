@@ -180,9 +180,44 @@ enum SystemAudioController {
         return status == noErr
     }
 
-    static func setMuted(_ muted: Bool) {
-        let deviceID = defaultOutputDevice
-        guard deviceID != 0 else { return }
+    /// Returns the current default output device ID, or nil if unavailable.
+    static var currentDefaultOutputDeviceID: AudioDeviceID? {
+        let id = defaultOutputDevice
+        return id != 0 ? id : nil
+    }
+
+    /// Returns true if the mute property can be set on the given device.
+    static func isMutePropertySettable(on deviceID: AudioDeviceID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyMute,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        guard AudioObjectHasProperty(deviceID, &address) else { return false }
+        var settable: DarwinBoolean = false
+        guard AudioObjectIsPropertySettable(deviceID, &address, &settable) == noErr else { return false }
+        return settable.boolValue
+    }
+
+    /// Returns the current mute state for the given device (false on failure).
+    static func isMuted(on deviceID: AudioDeviceID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyMute,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var mute: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &mute) == noErr else { return false }
+        return mute != 0
+    }
+
+    /// Set mute state on a specific device. Guards on settability first.
+    static func setMuted(_ muted: Bool, on deviceID: AudioDeviceID) {
+        guard isMutePropertySettable(on: deviceID) else {
+            AppLogger.audio.debug("Mute property not settable on device \(deviceID), skipping")
+            return
+        }
 
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyMute,
@@ -195,7 +230,13 @@ enum SystemAudioController {
 
         let status = AudioObjectSetPropertyData(deviceID, &address, 0, nil, size, &mute)
         if status != noErr {
-            AppLogger.audio.error("Failed to \(muted ? "mute" : "unmute") audio: \(status)")
+            AppLogger.audio.error("Failed to \(muted ? "mute" : "unmute") audio on device \(deviceID): \(status)")
         }
+    }
+
+    /// Set mute state on the current default output device. Used for launch/terminate recovery.
+    static func setMuted(_ muted: Bool) {
+        guard let deviceID = currentDefaultOutputDeviceID else { return }
+        setMuted(muted, on: deviceID)
     }
 }
