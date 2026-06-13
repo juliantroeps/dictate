@@ -103,6 +103,23 @@ enum FocusedTextElementLocator {
     }
 }
 
+enum TextSplice {
+    /// Returns the spliced string, or nil if the range is out of bounds for `value`.
+    static func splice(value: String, range: CFRange, with text: String) -> String? {
+        let nsValue = value as NSString
+        let length = nsValue.length
+        guard range.location >= 0,
+              range.length >= 0,
+              range.location <= length,
+              length - range.location >= range.length
+        else { return nil }
+        return nsValue.replacingCharacters(
+            in: NSRange(location: range.location, length: range.length),
+            with: text
+        )
+    }
+}
+
 enum ValueSpliceInjector {
     static func inject(element: AXUIElement, text: String) -> Bool {
         var valueRef: CFTypeRef?
@@ -111,10 +128,7 @@ enum ValueSpliceInjector {
 
         guard let range = FocusedTextElementLocator.selectedTextRange(of: element) else { return false }
 
-        let newValue = (currentValue as NSString).replacingCharacters(
-            in: NSRange(location: range.location, length: range.length),
-            with: text
-        )
+        guard let newValue = TextSplice.splice(value: currentValue, range: range, with: text) else { return false }
 
         guard AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, newValue as CFTypeRef) == .success else { return false }
 

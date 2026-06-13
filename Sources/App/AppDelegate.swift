@@ -20,9 +20,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         runtimeState: runtimeState
     )
     private var permissionTimer: Timer?
+    private var restartRetryTimer: Timer?
     private var eventMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Defensive unmute on launch: recovers from a previous crash/force-quit that left
+        // the output muted mid-recording. Acceptable tradeoff - if the user deliberately
+        // muted before launching, this will unmute. SIGKILL cannot be caught; launch is
+        // the only recovery path for that scenario.
+        SystemAudioController.setMuted(false)
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
         if let button = statusItem.button {
@@ -37,12 +44,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AccessibilityPermission.requestIfNeeded()
         MicrophonePermission.requestInBackground()
 
+        _ = dictationCoordinator // force lazy init so engine callbacks are wired before load
         engineCoordinator.prepare()
         audioDeviceCoordinator.applyStartupSelectionIfNeeded()
         audioDeviceCoordinator.handleInputConfigurationChanged()
         audioDeviceCoordinator.observeSelectionChanges()
         observeModelChange()
-        audioCapture.onEvent = { [weak self] event in
+        // @Sendable: this closure is invoked from the audio tap thread (via
+        // processAudioBuffer -> onEvent). Without it the closure inherits MainActor
+        // isolation from this context and traps on the realtime thread. The body only
+        // hops to main via Task { @MainActor }, which is safe from any thread.
+        audioCapture.onEvent = { @Sendable [weak self] event in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.dictationCoordinator.handleAudioCaptureEvent(event)
@@ -100,11 +112,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func restartKeyListener() {
+        restartRetryTimer?.invalidate()
+        restartRetryTimer = nil
         keyListener.stop()
         if keyListener.start() {
             AppLogger.app.info("Key listener restarted after wake")
         } else {
-            AppLogger.app.error("Key listener restart failed after wake")
+            AppLogger.app.error("Key listener restart failed after wake; scheduling one retry")
+            restartRetryTimer?.invalidate()
+            restartRetryTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.restartRetryTimer = nil
+                    if self.keyListener.start() {
+                        AppLogger.app.info("Key listener restarted on retry")
+                    } else {
+                        AppLogger.app.error("Key listener retry failed; will recover on next wake")
+                    }
+                }
+            }
         }
     }
 
@@ -120,6 +146,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.closePopover()
             }
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Restore mute to captured prior state on clean exit (Cmd-Q, etc.).
+        // Covers normal termination mid-hold; SIGKILL/crash recovery is handled at next launch.
+        dictationCoordinator.restoreMuteIfNeeded()
     }
 
     private func closePopover() {

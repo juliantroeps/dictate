@@ -4,7 +4,7 @@ import Foundation
 final class KeyListener {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private var fnDown = false
+    var fnDown = false
 
     var onKeyDown: (() -> Void)?
     var onKeyUp: (() -> Void)?
@@ -18,10 +18,10 @@ final class KeyListener {
             place: .headInsertEventTap,
             options: .listenOnly,
             eventsOfInterest: eventMask,
-            callback: { _, _, event, userInfo in
+            callback: { _, type, event, userInfo in
                 guard let userInfo else { return Unmanaged.passUnretained(event) }
                 let listener = Unmanaged<KeyListener>.fromOpaque(userInfo).takeUnretainedValue()
-                listener.handleFlagsChanged(event)
+                listener.handleEvent(type: type, event: event)
                 return Unmanaged.passUnretained(event)
             },
             userInfo: selfPtr
@@ -45,11 +45,33 @@ final class KeyListener {
         }
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
         }
         eventTap = nil
         runLoopSource = nil
         fnDown = false
         AppLogger.app.info("Key listener stopped")
+    }
+
+    func handleEvent(type: CGEventType, event: CGEvent) {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            handleTapDisabled()
+            return
+        }
+        handleFlagsChanged(event)
+    }
+
+    private func handleTapDisabled() {
+        AppLogger.app.error("Event tap disabled (timeout or user input); re-enabling")
+        if fnDown {
+            // Tear down any in-flight hold so the downstream recording/mute/overlay
+            // don't get stuck; mirrors handleFlagsChanged's release branch.
+            fnDown = false
+            onKeyUp?()
+        }
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: true)
+        }
     }
 
     private func handleFlagsChanged(_ event: CGEvent) {

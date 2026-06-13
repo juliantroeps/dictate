@@ -8,6 +8,10 @@ protocol EngineSettingsManaging: AnyObject {
 @MainActor
 protocol TranscriptionEngineCoordinating: AnyObject, Sendable {
     var isReady: Bool { get }
+    /// Called on the main actor when the engine transitions to ready.
+    var onReady: (@MainActor () -> Void)? { get set }
+    /// Called on the main actor when all load attempts fail.
+    var onLoadFailed: (@MainActor () -> Void)? { get set }
     func prepare(attempts: Int)
     func reload(using model: String)
     func transcribe(audioSamples: [Float]) async throws -> String
@@ -26,6 +30,8 @@ final class EngineCoordinator: TranscriptionEngineCoordinating {
     private var loadGeneration: Int = 0
 
     var isReady: Bool { engine.isReady }
+    var onReady: (@MainActor () -> Void)?
+    var onLoadFailed: (@MainActor () -> Void)?
 
     init(
         settings: any EngineSettingsManaging = Settings.shared,
@@ -63,6 +69,12 @@ final class EngineCoordinator: TranscriptionEngineCoordinating {
     }
 
     private func startLoading(attempts: Int, showLoadingImmediately: Bool) {
+        // Join an in-flight load rather than cancelling and restarting it.
+        // Restarting cancels a healthy launch load whose WhisperKit(config) init
+        // does not observe cancellation promptly, allowing two concurrent model
+        // builds on the same engine instance.
+        if loadTask != nil, !showLoadingImmediately { return }
+
         loadTask?.cancel()
         let engine = engine
         loadGeneration += 1
@@ -76,13 +88,22 @@ final class EngineCoordinator: TranscriptionEngineCoordinating {
                 }
             }
 
+            // Overlay grace timer runs concurrently so it never gates the model load.
+            // Start the engine prepare loop immediately; show the overlay only if
+            // the load is still in progress after 1s.
+            let graceTask: Task<Void, Never>?
             if !showLoadingImmediately {
-                try? await Task.sleep(for: .seconds(1))
-                guard !Task.isCancelled else { return }
-                if !engine.isReady {
-                    self.overlay.showModelLoading()
+                graceTask = Task { @MainActor [weak self, generation] in
+                    try? await Task.sleep(for: .seconds(1))
+                    guard let self, !Task.isCancelled else { return }
+                    if !engine.isReady, self.loadGeneration == generation {
+                        self.overlay.showModelLoading()
+                    }
                 }
+            } else {
+                graceTask = nil
             }
+            defer { graceTask?.cancel() }
 
             for attempt in 1...attempts {
                 guard !Task.isCancelled else {
@@ -97,6 +118,7 @@ final class EngineCoordinator: TranscriptionEngineCoordinating {
                     }
                     self.runtimeState.engineStatus = .ready
                     self.overlay.hideModelLoading()
+                    self.onReady?()
                     return
                 } catch is CancellationError {
                     self.overlay.hideModelLoading()
@@ -114,6 +136,7 @@ final class EngineCoordinator: TranscriptionEngineCoordinating {
             self.runtimeState.engineStatus = .failed
             self.overlay.hideModelLoading()
             AppLogger.transcription.error("Engine setup failed after \(attempts) attempts")
+            self.onLoadFailed?()
         }
     }
 }

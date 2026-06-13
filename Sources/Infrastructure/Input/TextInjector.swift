@@ -8,6 +8,18 @@ enum TextInjector {
         case copiedToClipboard
     }
 
+    /// True if there is a frontmost app with a focused, non-web text element
+    /// that `inject` would write into directly (not via a clipboard fallback).
+    @MainActor
+    static func hasInjectableTarget() -> Bool {
+        guard let frontApp = NSWorkspace.shared.frontmostApplication else { return false }
+        guard let focused = FocusedTextElementLocator.focusedElement(for: frontApp) else { return false }
+        if focused.role == "AXWebArea" || FocusedTextElementLocator.isInsideWebArea(focused.element) {
+            return false
+        }
+        return true
+    }
+
     /// Insert text into the focused text field of the frontmost app.
     /// Falls back to clipboard paste, then clipboard-only.
     @MainActor
@@ -77,6 +89,10 @@ enum TextInjector {
         restorer.restore()
     }
 
+    /// Last-resort `.copiedToClipboard` path: no frontmost app to paste into, so
+    /// leave the dictation on the clipboard for the user to paste manually.
+    /// Intentionally does NOT save/restore prior contents (unlike pasteViaClipboard) -
+    /// the dictation must remain on the pasteboard after this returns.
     @MainActor
     private static func copyToClipboard(_ text: String) {
         NSPasteboard.general.clearContents()
