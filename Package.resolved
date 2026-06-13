@@ -1,6 +1,15 @@
 {
-  "originHash" : "204bcb3991a23172d658319cfc441b6d8079090beef199c67cffaba2ebedffcf",
+  "originHash" : "b1c2ce816ab8d9b4992d67875b22ed1015993dc14940794b4f495e4e10fd13e4",
   "pins" : [
+    {
+      "identity" : "sentry-cocoa",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/getsentry/sentry-cocoa",
+      "state" : {
+        "revision" : "2c420d31d0c31b525fa9e7c552ef0fc9d924befc",
+        "version" : "9.17.1"
+      }
+    },
     {
       "identity" : "swift-argument-parser",
       "kind" : "remoteSourceControl",

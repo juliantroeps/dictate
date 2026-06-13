@@ -44,6 +44,19 @@ jobs:
           BUILD_NUMBER: ${{ github.run_number }}
         run: scripts/package.sh
 
+      - name: Upload dSYMs to Sentry
+        if: steps.semver.outputs.new_version != '' && env.SENTRY_AUTH_TOKEN != ''
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        run: |
+          curl -sL https://sentry.io/get-cli/ | bash
+          sentry-cli debug-files upload \
+            --org "$SENTRY_ORG" \
+            --project "$SENTRY_PROJECT" \
+            dist/dictate.dSYM
+
       - name: Push tag
         if: steps.semver.outputs.new_version != ''
         env:
