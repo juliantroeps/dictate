@@ -76,6 +76,7 @@ final class OverlayController {
     }
 
     func hide() {
+        state.phase = .idle
         generation += 1
         let g = generation
         guard let window else { return }

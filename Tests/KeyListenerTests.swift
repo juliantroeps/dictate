@@ -28,15 +28,15 @@ struct KeyListenerTests {
         #expect(listener.fnDown == true)
         #expect(keyDownCount == 1)
 
-        // Now deliver tapDisabledByTimeout - fnDown should reset, callbacks NOT fired.
+        // Now deliver tapDisabledByTimeout - fnDown should reset, onKeyUp fired once.
         listener.handleEvent(type: .tapDisabledByTimeout, event: makeFlagsEvent(fnPressed: false))
         #expect(listener.fnDown == false)
-        // onKeyUp must NOT fire for a tap-disable event.
-        #expect(keyUpCount == 0)
+        // Tap disabled mid-hold must tear down the in-flight hold exactly once.
+        #expect(keyUpCount == 1)
     }
 
     @Test
-    func tapDisabledByUserInputDoesNotFireKeyUpCallback() {
+    func tapDisabledByUserInputFiresKeyUpWhenHeld() {
         let listener = KeyListener()
         var keyUpCount = 0
         listener.onKeyUp = { keyUpCount += 1 }
@@ -45,8 +45,22 @@ struct KeyListenerTests {
         listener.handleEvent(type: .flagsChanged, event: makeFlagsEvent(fnPressed: true))
         #expect(listener.fnDown == true)
 
-        // Tap disabled by user input - must NOT invoke onKeyUp.
+        // Tap disabled by user input while held - must tear down the hold via onKeyUp.
         listener.handleEvent(type: .tapDisabledByUserInput, event: makeFlagsEvent(fnPressed: false))
+        #expect(keyUpCount == 1)
+        #expect(listener.fnDown == false)
+    }
+
+    @Test
+    func tapDisabledWhenNotHeldDoesNotFireKeyUp() {
+        let listener = KeyListener()
+        var keyUpCount = 0
+        listener.onKeyUp = { keyUpCount += 1 }
+
+        // No Fn press; fnDown is false.
+        #expect(listener.fnDown == false)
+
+        listener.handleEvent(type: .tapDisabledByTimeout, event: makeFlagsEvent(fnPressed: false))
         #expect(keyUpCount == 0)
         #expect(listener.fnDown == false)
     }

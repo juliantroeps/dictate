@@ -102,6 +102,23 @@ final class DictationCoordinator {
         runtimeState.activeMute = nil
     }
 
+    /// Apply system-output mute for the current default device if the user enabled
+    /// it and the device is settable. Records activeMute only when we actually mute
+    /// (i.e. the user had not already muted it deliberately).
+    private func applyMuteIfNeeded() {
+        if settings.muteSystemAudio,
+           let deviceID = muteController.currentDeviceID(),
+           muteController.isSettable(deviceID) {
+            let priorMuted = muteController.isMuted(deviceID)
+            if !priorMuted {
+                // Only mute if the user hasn't already muted - don't clobber deliberate mutes.
+                muteController.setMuted(true, deviceID)
+                runtimeState.activeMute = ActiveMute(deviceID: deviceID, priorMuted: priorMuted)
+            }
+            // If already muted, leave activeMute nil - key-up will no-op correctly.
+        }
+    }
+
     func handleAudioCaptureEvent(_ event: AudioCaptureEvent) {
         switch event {
         case .audioLevel(let level):
@@ -134,17 +151,7 @@ final class DictationCoordinator {
         overlay.state.phase = .recording
         overlay.show()
 
-        if settings.muteSystemAudio,
-           let deviceID = muteController.currentDeviceID(),
-           muteController.isSettable(deviceID) {
-            let priorMuted = muteController.isMuted(deviceID)
-            if !priorMuted {
-                // Only mute if the user hasn't already muted - don't clobber deliberate mutes.
-                muteController.setMuted(true, deviceID)
-                runtimeState.activeMute = ActiveMute(deviceID: deviceID, priorMuted: priorMuted)
-            }
-            // If already muted, leave activeMute nil - key-up will no-op correctly.
-        }
+        applyMuteIfNeeded()
 
         runtimeState.recordingStartTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -307,6 +314,10 @@ final class DictationCoordinator {
         guard let samples = runtimeState.pendingSamples else { return }
         runtimeState.pendingSamples = nil
         overlay.state.phase = .processing
+        // Re-show: the engine-ready path called hideModelLoading() which scheduled an
+        // orderOut at the current generation. show() bumps the generation, cancelling
+        // that pending orderOut and re-displaying the window for buffered transcription.
+        overlay.show()
         startTranscription(samples: samples, logLabel: "buffered dictation")
     }
 
@@ -325,6 +336,7 @@ final class DictationCoordinator {
         runtimeState.keyDownTime = now()
         overlay.state.phase = .recording
         overlay.show()
+        applyMuteIfNeeded()
 
         runtimeState.recordingStartTask = Task { @MainActor [weak self] in
             guard let self else { return }

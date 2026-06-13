@@ -124,10 +124,20 @@ struct OverlayControllerTests {
         // Fire the current-generation timer - it should hide.
         scheduledWork[0]()
 
-        // Phase must have returned to idle (hide() was called by the timer).
-        // Since FakeOverlayController.hide() is not used here, the real hide()
-        // does not synchronously set phase - we check the timer ran correctly
-        // by asserting it set phase to .idle before calling hide().
+        // Phase must have returned to idle (hide() resets phase to .idle).
+        #expect(overlay.state.phase == .idle)
+    }
+
+    // MARK: - hide() resets phase to idle
+
+    @Test
+    func hide_resetsPhaseToIdle() {
+        let overlay = OverlayController(
+            scheduleAfter: { _, _ in },
+            onOrderOut: { }
+        )
+        overlay.state.phase = .recording
+        overlay.hide()
         #expect(overlay.state.phase == .idle)
     }
 

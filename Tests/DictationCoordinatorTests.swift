@@ -106,6 +106,7 @@ struct DictationCoordinatorTests {
         #expect(engine.transcribeInputs.isEmpty)
 
         // Engine becomes ready - should flush the buffered samples.
+        let showsBeforeFlush = overlay.showCount
         engine.becomeReady()
 
         await coordinator.runtimeState.transcriptionTask?.value
@@ -113,6 +114,8 @@ struct DictationCoordinatorTests {
         #expect(engine.transcribeInputs.count == 1)
         #expect(injectedTexts == ["transcribed text"])
         #expect(coordinator.runtimeState.pendingSamples == nil)
+        // flushPendingSamples must re-show the overlay so the pending orderOut is cancelled.
+        #expect(overlay.showCount == showsBeforeFlush + 1)
         #expect(overlay.state.phase == .idle)
     }
 
@@ -147,6 +150,7 @@ struct DictationCoordinatorTests {
         #expect(engine.prepareAttempts == [1])
         #expect(engine.transcribeInputs.isEmpty)
 
+        let showsBeforeFlush = overlay.showCount
         engine.becomeReady()
 
         await coordinator.runtimeState.transcriptionTask?.value
@@ -154,6 +158,8 @@ struct DictationCoordinatorTests {
         #expect(engine.transcribeInputs.count == 1)
         #expect(injectedTexts == ["transcribed text"])
         #expect(coordinator.runtimeState.pendingSamples == nil)
+        // flushPendingSamples must re-show the overlay so the pending orderOut is cancelled.
+        #expect(overlay.showCount == showsBeforeFlush + 1)
         #expect(overlay.state.phase == .idle)
     }
 
@@ -428,6 +434,59 @@ struct DictationCoordinatorTests {
         // Key-up must restore original device 1, not the new device 2
         #expect(fakeMute.calls.last?.device == 1)
         #expect(fakeMute.calls.last?.muted == false)
+    }
+
+    @Test @MainActor
+    func deviceChangeWhileHeld_reAppliesMuteOnNewDevice() async {
+        let settings = FakeDictationSettings()
+        settings.minHoldDuration = 0.1
+        settings.muteSystemAudio = true
+
+        var currentTime: UInt64 = 1_000_000_000
+        let audioCapture = FakeAudioCaptureManager()
+        let overlay = FakeOverlayController()
+        let engine = FakeTranscriptionEngineCoordinator()
+        engine.isReady = true
+        let fakeMute = FakeMuteController()
+        fakeMute.currentDevice = 1
+        fakeMute.settable = [1, 2]
+        fakeMute.mutedState[1] = false
+        fakeMute.mutedState[2] = false
+
+        let coordinator = DictationCoordinator(
+            audioCapture: audioCapture,
+            overlay: overlay,
+            engineCoordinator: engine,
+            settings: settings,
+            now: { DispatchTime(uptimeNanoseconds: currentTime) },
+            injectText: { _ in .pasted },
+            muteController: fakeMute.makeController()
+        )
+
+        coordinator.handleKeyDown()
+        await coordinator.runtimeState.recordingStartTask?.value
+        // Muted device 1 on key-down.
+        #expect(fakeMute.calls.count == 1)
+        #expect(fakeMute.calls[0] == (muted: true, device: 1))
+
+        // Default device changes mid-hold, then an interruption fires.
+        fakeMute.currentDevice = 2
+        let minSamples = Int(settings.minHoldDuration * 16000) + 1
+        let samples = [Float](repeating: 0.1, count: minSamples)
+        coordinator.handleRecordingInterrupted(samples: samples)
+
+        // Interruption restored device 1 to prior (unmuted) and cleared activeMute.
+        #expect(fakeMute.calls.last?.muted == false)
+        #expect(fakeMute.calls.last?.device == 1)
+        #expect(coordinator.runtimeState.activeMute == nil)
+
+        // Stable re-arm while key still held must re-mute the NEW device 2.
+        coordinator.handleAudioCaptureEvent(.inputConfigurationChanged(stable: true))
+        await coordinator.runtimeState.recordingStartTask?.value
+
+        #expect(fakeMute.calls.last?.muted == true)
+        #expect(fakeMute.calls.last?.device == 2)
+        #expect(coordinator.runtimeState.activeMute?.deviceID == 2)
     }
 
     @Test @MainActor

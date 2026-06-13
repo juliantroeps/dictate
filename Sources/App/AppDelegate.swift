@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AccessibilityPermission.requestIfNeeded()
         MicrophonePermission.requestInBackground()
 
+        _ = dictationCoordinator // force lazy init so engine callbacks are wired before load
         engineCoordinator.prepare()
         audioDeviceCoordinator.applyStartupSelectionIfNeeded()
         audioDeviceCoordinator.handleInputConfigurationChanged()
@@ -111,6 +112,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func restartKeyListener() {
+        restartRetryTimer?.invalidate()
+        restartRetryTimer = nil
         keyListener.stop()
         if keyListener.start() {
             AppLogger.app.info("Key listener restarted after wake")

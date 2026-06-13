@@ -63,7 +63,12 @@ final class KeyListener {
 
     private func handleTapDisabled() {
         AppLogger.app.error("Event tap disabled (timeout or user input); re-enabling")
-        fnDown = false
+        if fnDown {
+            // Tear down any in-flight hold so the downstream recording/mute/overlay
+            // don't get stuck; mirrors handleFlagsChanged's release branch.
+            fnDown = false
+            onKeyUp?()
+        }
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: true)
         }
