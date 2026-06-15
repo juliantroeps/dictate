@@ -27,16 +27,19 @@ struct CategoryLogger {
     func info(_ message: String) {
         logger.info("\(message, privacy: .public)")
         mirror(message, level: "INFO")
+        SentryConfiguration.breadcrumb(category: category, message: message)
     }
 
     func warning(_ message: String) {
         logger.warning("\(message, privacy: .public)")
         mirror(message, level: "WARN")
+        SentryConfiguration.breadcrumb(category: category, message: message, warning: true)
     }
 
     func error(_ message: String) {
         logger.error("\(message, privacy: .public)")
         mirror(message, level: "ERROR")
+        SentryConfiguration.captureError(category: category, message: message)
     }
 
     private func mirror(_ message: String, level: String) {
