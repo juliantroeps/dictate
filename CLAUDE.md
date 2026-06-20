@@ -11,9 +11,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```sh
 swift build                    # build (first build fetches WhisperKit deps, slow)
 .build/debug/dictate           # run (do NOT use `swift run` - it rebuilds and invalidates TCC)
+swift test                     # run unit tests (Tests/)
+scripts/check.sh               # build + test + swiftlint --strict + swift-format lint
 ```
-
-No tests exist. No linter configured.
 
 ## Release
 
@@ -26,20 +26,28 @@ scripts/tag-release.sh              # commit, tag, push, gh release
 
 ## Architecture
 
-Single-target SPM executable (`Sources/`), macOS 14+, Swift 6 strict concurrency. No test target.
+SPM executable + test target, macOS 14+, Swift 6 strict concurrency. `Sources/` grouped: `App/` `Features/` `Infrastructure/` `Support/` `UI/`.
 
-**Core flow:** `AppDelegate` orchestrates everything. Fn key press (via `KeyListener` CGEventTap) triggers `AudioCaptureManager` recording. On release, audio goes to `TranscriptionEngine` (WhisperKit), then `TextInjector` places text at cursor.
+**Core flow:** `DictationCoordinator` orchestrates dictation. Fn key press (via `KeyListener` CGEventTap) triggers `AudioCaptureManager` recording. On release, audio goes through `EngineCoordinator` -> `TranscriptionEngine` (WhisperKit), then `TextInjector` places text at cursor. `AppDelegate` is thin wiring (status item, popover, builds coordinators).
 
-Key components:
-- `AppDelegate` - central coordinator: status item, popover, key callbacks, engine lifecycle, audio mute
-- `KeyListener` - CGEventTap on `flagsChanged` for Fn/Globe (`maskSecondaryFn`). Requires Accessibility permission on the *terminal*, not the binary
-- `AudioCaptureManager` - AVAudioEngine tap, converts to 16kHz mono Float32
-- `TranscriptionEngine` - protocol; `WhisperKitEngine` impl. WhisperKit pinned to `0.9.0..<0.16.0` (0.16.0 broken on macOS 15 SDK)
-- `TextInjector` - 3-strategy cascade: AXSelectedText splice -> AXValue splice -> clipboard+Cmd+V fallback. Cursor verification detects apps that silently ignore AX writes (terminals, Electron)
-- `OverlayController` / `RecordingOverlayView` / `OverlayState` - floating borderless window (level `.screenSaver`) showing recording/processing/error states
-- `SystemAudioController` - CoreAudio mute/unmute default output
-- `Settings` - `@Observable` singleton backed by UserDefaults
-- `PromptProvider` - reads vocabulary hints from `~/.dictate/prompt.txt`
+Key components (by directory):
+- `App/AppDelegate` - wiring: status item, popover, builds `EngineCoordinator` + `DictationCoordinator`
+- `Features/Dictation/` - `DictationCoordinator` (key callbacks -> record -> transcribe -> inject) + `DictationRuntimeState`
+- `Features/Settings/` - `SettingsView`, `SettingsRefreshController`
+- `Infrastructure/Input/` - `KeyListener` (CGEventTap on `flagsChanged` for Fn/Globe `maskSecondaryFn`; a11y on the *terminal*, not the binary), `TextInjector` (+ `TextInjectionHelpers`): 3-strategy cascade AXSelectedText splice -> AXValue splice -> clipboard+Cmd+V, cursor verification catches apps that silently ignore AX writes (terminals, Electron)
+- `Infrastructure/Audio/` - `AudioCaptureManager` (AVAudioEngine tap -> 16kHz mono Float32), `AudioDeviceCoordinator`/`AudioDevicePolicy`/`AudioCaptureEvent` (mid-recording device-change handling), `SystemAudioController` (CoreAudio mute/unmute default output)
+- `Infrastructure/Transcription/` - `EngineCoordinator`, `TranscriptionEngine` protocol + `WhisperKitEngine` (pinned `0.9.0..<0.16.0`; 0.16.0 broken on macOS 15 SDK), `PromptProvider` (vocabulary hints from `~/.dictate/prompt.txt`)
+- `Infrastructure/Permissions/` - `AccessibilityPermission`, `MicrophonePermission`
+- `Support/` - `AppLogger`, `Settings` (`@Observable` singleton backed by UserDefaults)
+- `UI/Overlay/` - `OverlayController`/`RecordingOverlayView`/`OverlayState`: floating borderless window (level `.screenSaver`) showing recording/processing/error states
+
+## Transcription / model storage
+
+- Inference is **on-device** (WhisperKit + CoreML); recorded audio never leaves the machine.
+- **First run downloads the model** from HuggingFace (`argmaxinc/whisperkit-coreml`) - needs network once. Subsequent runs are fully offline.
+- Models cache at `~/Documents/huggingface/models/argmaxinc/whisperkit-coreml/<model>/`; `WhisperKitEngine.cachedModelFolder()` reuses it when an `.mlmodelc` is present.
+- Default model `openai_whisper-tiny.en`, overridable via `Settings.whisperModel` (changing it calls `EngineCoordinator.reload`).
+- Load is lazy on launch: 3 attempts w/ backoff, "loading" overlay after a 1s grace.
 
 ## Key gotchas
 
