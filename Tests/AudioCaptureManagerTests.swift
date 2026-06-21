@@ -73,6 +73,104 @@ struct AudioCaptureManagerTests {
 
     // MARK: - drainConverterTail tests
 
+    // MARK: - boundedDrain tests
+
+    @Test
+    func boundedDrainReturnsEmptyWhenWorkSpins() async {
+        // PRIMARY regression test for issue #22: inject a never-terminating work closure
+        // and assert boundedDrain returns [] within the timeout bound. WITHOUT the bounded
+        // wrapper a synchronous spin here would hang the test suite forever; WITH it the
+        // wrapper abandons the wedged thread after `timeout` and returns [] instead.
+        let start = Date()
+        let result = await Task.detached {
+            AudioCaptureManager.boundedDrain(timeout: 0.3) {
+                // Spin indefinitely - simulates an uninterruptible Apple resampler hang.
+                var x = 0.0
+                while true { x += 1; if x < 0 { break } }
+                return [99.0]
+            }
+        }.value
+        #expect(result == [], "boundedDrain must return [] when work spins past the timeout")
+        #expect(Date().timeIntervalSince(start) < 2.0, "boundedDrain must not block longer than timeout + overhead")
+    }
+
+    @Test
+    func boundedDrainReturnsWorkResultOnFastPath() {
+        // The wrapper must be transparent for normal (fast) work - proves the happy path
+        // is unaffected and the timeout is not spuriously hit.
+        let result = AudioCaptureManager.boundedDrain(timeout: 1.0) { [1.0, 2.0, 3.0] }
+        #expect(result == [1.0, 2.0, 3.0], "boundedDrain must pass through the work result on the fast path")
+    }
+
+    @Test
+    func boundedDrainConverterTailReturnsTailForValidConverter() throws {
+        // End-to-end: the bounded wrapper preserves drainConverterTail's normal output.
+        let inputFormat = try #require(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 44_100,
+            channels: 1,
+            interleaved: false
+        ))
+        let targetFormat = try #require(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        ))
+        let converter = try #require(AVAudioConverter(from: inputFormat, to: targetFormat))
+
+        // Stream a ramp buffer through the converter first (mirrors drainConverterTailReturnsTailAfterResampling).
+        let frameCount: AVAudioFrameCount = 44_100
+        let inputBuffer = try #require(AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: frameCount))
+        inputBuffer.frameLength = frameCount
+        if let data = inputBuffer.floatChannelData?[0] {
+            for i in 0..<Int(frameCount) { data[i] = Float(i) / Float(frameCount) }
+        }
+        let outputFrameCount = try #require(AudioCaptureManager.outputFrameCount(
+            sampleRate: inputFormat.sampleRate, inputFrames: frameCount))
+        let outputBuffer = try #require(AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outputFrameCount))
+        var inputConsumed = false
+        converter.convert(to: outputBuffer, error: nil) { _, outStatus in
+            if inputConsumed { outStatus.pointee = .noDataNow; return nil }
+            inputConsumed = true
+            outStatus.pointee = .haveData
+            return inputBuffer
+        }
+
+        let tail = AudioCaptureManager.boundedDrainConverterTail(converter)
+        // The SRC filter-delay tail must be non-empty after a streaming pass.
+        #expect(tail.count > 0, "boundedDrainConverterTail must recover the resampler tail")
+        #expect(tail.count <= 4096, "boundedDrainConverterTail must be bounded by the flush buffer capacity")
+    }
+
+    @Test
+    func drainConverterTailReturnsEmptyForDegenerateInputFormat() throws {
+        // Regression guard: the sampleRate>0 check in drainConverterTail must return []
+        // without calling the endOfStream convert pass. sampleRate:0 builds a real
+        // AVAudioFormat and AVAudioConverter (verified empirically), so the guard is
+        // actually reached and exercised - unlike sampleRate:1 which yields a nil converter.
+        let targetFormat = try #require(AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        ))
+        // sampleRate:0 builds an AVAudioFormat and AVAudioConverter whose inputFormat.sampleRate==0,
+        // triggering the guard. If the platform refuses, bail (guard is unreachable for that format).
+        guard let degenerateInput = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 0,
+            channels: 1,
+            interleaved: false
+        ), let converter = AVAudioConverter(from: degenerateInput, to: targetFormat) else {
+            return
+        }
+
+        let tail = AudioCaptureManager.drainConverterTail(converter)
+        // The guard must fire before the Apple convert call, returning exactly [].
+        #expect(tail == [], "drainConverterTail must return [] for a converter with sampleRate==0")
+    }
+
     // MARK: - Cancellation tests
 
     @Test
