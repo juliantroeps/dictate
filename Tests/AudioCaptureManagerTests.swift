@@ -18,6 +18,23 @@ private struct TestSendableBox<T>: @unchecked Sendable {
     init(_ value: T) { self.value = value }
 }
 
+/// Thread-safe recorder of whether any engine was built on the main thread after init.
+private final class EngineBuildRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var builtOnMainAfterFirst = false
+    private var count = 0
+    func record() {
+        let onMain = Thread.isMainThread
+        lock.withLock {
+            count += 1
+            // The first build is the init() build (allowed on main); flag only later ones.
+            if count > 1 && onMain { builtOnMainAfterFirst = true }
+        }
+    }
+    var sawMainThreadBuildAfterInit: Bool { lock.withLock { builtOnMainAfterFirst } }
+    var buildCount: Int { lock.withLock { count } }
+}
+
 @MainActor
 struct AudioCaptureManagerTests {
     @Test
@@ -185,6 +202,143 @@ struct AudioCaptureManagerTests {
         }.value
 
         #expect(received.value, "onEvent (audioLevel) must fire from an off-main processAudioBuffer call")
+    }
+
+    // MARK: - Engine factory seam / off-main construction tests
+
+    @Test
+    func configChangeBuildsReplacementEngineOnMainForAtomicSwap() {
+        // Construction is cheap and stays on main so the swap is atomic/race-free;
+        // only teardown (removeTap/stop/dealloc) goes off-main. See #21 fix.
+        let recorder = EngineBuildRecorder()
+        let manager = AudioCaptureManager(makeEngine: { @Sendable in
+            recorder.record()
+            return AVAudioEngine()
+        })
+        manager.triggerConfigChangeForTesting()
+        #expect(recorder.buildCount >= 2, "config change must build a replacement engine")
+    }
+
+    @Test
+    func startRecordingAfterConfigChangeTapsTheFreshEngine() async {
+        // Regression for the stale-engine race: after a swap, the tap/start must operate
+        // on the newly installed engine, not the torn-down old one.
+        let manager = AudioCaptureManager(makeEngine: { @Sendable in AVAudioEngine() })
+
+        // Trigger a config-change swap (synchronous on-main assignment now).
+        manager.triggerConfigChangeForTesting()
+        let fresh = manager.currentEngineForTesting
+
+        // Immediately attempt a record (key-down). On CI, start() fails after the tap is
+        // installed, but installRecordingTap already recorded which engine it tapped.
+        _ = try? await Task { @MainActor in try await manager.startRecording() }.value
+
+        #expect(manager.lastTappedEngine === fresh,
+                "tap must be installed on the engine swapped in on main, not the torn-down one")
+    }
+
+    @Test
+    func configChangeAssignsReplacementEngineSynchronouslyOnMain() {
+        let manager = AudioCaptureManager()
+        let before = manager.currentEngineForTesting
+        manager.triggerConfigChangeForTesting()
+        // No await: assignment must have already happened on main before returning.
+        #expect(manager.currentEngineForTesting !== before,
+                "replacement engine must be installed synchronously on main (no deferred hop)")
+    }
+
+    @Test
+    func rapidConfigChangesAreDebouncedAndDoNotCrash() async {
+        // isSettling is now set at the top of handleConfigChange, so reentrant
+        // config changes during the settle window must be suppressed (no engine-swap storm).
+        let recorder = EngineBuildRecorder()
+        let manager = AudioCaptureManager(makeEngine: { @Sendable in
+            recorder.record()
+            return AVAudioEngine()
+        })
+
+        // Fire several in a row, mimicking BT-connect churn.
+        for _ in 0..<5 { manager.triggerConfigChangeForTesting() }
+        try? await Task.sleep(for: .milliseconds(300))
+
+        // init build + at most the first (un-gated) config change build; the rest are
+        // suppressed by isSettling. Strictly fewer than 1 + 5.
+        #expect(recorder.buildCount < 6, "reentrant config changes must be debounced by isSettling")
+        // Manager still usable afterwards.
+        #expect(manager.stopRecording() == [])
+    }
+
+    @Test
+    func configChangeSettleCompletionDeliversInputConfigChangedOnMainWithoutTrapping() async {
+        // Regression for the off-main completion / MainActor.assumeIsolated SIGTRAP:
+        // the settle completion (~settleDelay + validateDelay after a config change) used to
+        // run on a global queue and trap. It must run on main and deliver the event there.
+        let manager = AudioCaptureManager()
+        manager.settleDelay = 0.05
+        manager.validateDelay = 0.02
+
+        let sawInputConfigChanged = LockedFlag()
+        let deliveredOnMain = LockedFlag()
+        // Use a continuation so the test waits for the event rather than sleeping a
+        // fixed duration (avoids flakiness under heavy parallel test suite load).
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let resumed = LockedFlag()
+            manager.onEvent = { @Sendable event in
+                if case .inputConfigurationChanged = event {
+                    if Thread.isMainThread { deliveredOnMain.set() }
+                    sawInputConfigChanged.set()
+                    // Resume exactly once.
+                    if !resumed.value {
+                        resumed.set()
+                        continuation.resume()
+                    }
+                }
+            }
+            manager.triggerConfigChangeForTesting()
+        }
+
+        #expect(sawInputConfigChanged.value,
+                "settle completion must deliver .inputConfigurationChanged (no trap)")
+        #expect(deliveredOnMain.value,
+                ".inputConfigurationChanged must be delivered on the main thread")
+    }
+
+    @Test
+    func configChangeIsHandledAgainAfterSettleCompletes() async {
+        let recorder = EngineBuildRecorder()
+        let manager = AudioCaptureManager(makeEngine: { @Sendable in
+            recorder.record()
+            return AVAudioEngine()
+        })
+        manager.settleDelay = 0.05
+        manager.validateDelay = 0.02
+
+        // Wait for the first settle to complete via the event rather than a fixed sleep,
+        // so the test is not flaky under heavy parallel test suite load.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let resumed = LockedFlag()
+            manager.onEvent = { @Sendable event in
+                if case .inputConfigurationChanged = event {
+                    if !resumed.value {
+                        resumed.set()
+                        continuation.resume()
+                    }
+                }
+            }
+            manager.triggerConfigChangeForTesting()    // build #2; settle fires event when done
+        }
+        let countAfterFirstSettle = recorder.buildCount
+
+        manager.triggerConfigChangeForTesting()        // must NOT be suppressed -> build #3
+        #expect(recorder.buildCount > countAfterFirstSettle,
+                "after a settle completes, a new config change must be handled (isSettling reset)")
+    }
+
+    @Test
+    func defaultMakeEngineStillProducesUsableManager() {
+        // Default factory path (no injection) must behave as before.
+        let manager = AudioCaptureManager()
+        #expect(manager.stopRecording() == [])
     }
 
     @Test

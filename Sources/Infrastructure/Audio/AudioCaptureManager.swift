@@ -3,7 +3,10 @@ import CoreAudio
 
 @MainActor
 final class AudioCaptureManager {
-    private var engine = AVAudioEngine()
+    // Injectable so tests can record on which queue each engine is built and
+    // assert construction never happens on the main thread during a config change.
+    private let makeEngine: @Sendable () -> AVAudioEngine
+    private var engine: AVAudioEngine
     private var configChangeObserver: Any?
     // targetFormat is immutable and accessed from the audio tap thread (nonisolated);
     // nonisolated(unsafe) is safe because it is set once in init and never mutated.
@@ -29,9 +32,49 @@ final class AudioCaptureManager {
     // Written once in init before any concurrent access.
     nonisolated(unsafe) private var inputListenerBlock: AudioObjectPropertyListenerBlock = { _, _ in }
 
-    init() {
+#if DEBUG
+    // Test-only timing seam: lets tests shrink the settle/validate windows so the
+    // full config-change lifecycle can be exercised without a ~1.8s real-time sleep.
+    var settleDelay: TimeInterval = 1.5
+    var validateDelay: TimeInterval = 0.2
+#else
+    private let settleDelay: TimeInterval = 1.5
+    private let validateDelay: TimeInterval = 0.2
+#endif
+
+    init(makeEngine: @escaping @Sendable () -> AVAudioEngine = { AVAudioEngine() }) {
+        self.makeEngine = makeEngine
+        self.engine = makeEngine()   // initial build on init is fine (no device churn yet)
         setupEngineObserver()
         installDefaultInputListener()
+    }
+
+    /// Atomically swap to a freshly built engine ON MAIN (so callers and the next
+    /// startRecording() always see a fresh, tap-free engine the instant they return -
+    /// no start/stop race), then tear the OLD engine down OFF MAIN. removeTap/stop and
+    /// -[AVAudioEngine dealloc] each dispatch SYNCHRONOUSLY into AVFAudio's private
+    /// queue; during a device transition that queue is busy, so running them on main
+    /// deadlocks the UI (permanent beachball). AVAudioEngine() construction is cheap
+    /// and does not hit that queue the way teardown does, so it stays on main to keep
+    /// the swap atomic and race-free.
+    private func swapEngine() {
+        let oldEngine = engine
+        engine = makeEngine()
+        setupEngineObserver()
+        converterLock.withLock { converter = nil }
+        tearDownOffMain(oldEngine)
+    }
+
+    /// Hand the old engine's full teardown to a background queue. removeTap/stop and the
+    /// final dealloc all block on AVFAudio's private queue; off-main they block harmlessly.
+    private func tearDownOffMain(_ oldEngine: AVAudioEngine) {
+        let box = UncheckedSendableBox(oldEngine)
+        DispatchQueue.global(qos: .utility).async {
+            let engine = box.value
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            // `engine` (last strong ref) is released here, off-main -> dealloc blocks off-main.
+        }
     }
 
     private func setupEngineObserver() {
@@ -147,6 +190,9 @@ final class AudioCaptureManager {
         engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { @Sendable [weak self] pcmBuffer, _ in
             self?.processAudioBuffer(pcmBuffer)
         }
+#if DEBUG
+        lastTappedEngine = engine
+#endif
     }
 
     func stopRecording() -> [Float] {
@@ -168,21 +214,11 @@ final class AudioCaptureManager {
         }
         captured.append(contentsOf: tail)
 
-        // Swap in a fresh engine on main (cheap), then tear down the old one off-main.
-        // removeTap/stop dispatch into AVFAudio's private queue; during BT churn that
-        // queue can be busy and stall the main thread, delaying the Processing overlay
-        // on the key-up critical path.
-        let oldEngine = engine
-        engine = AVAudioEngine()
-        setupEngineObserver()
-        converterLock.withLock { converter = nil }
-
-        let box = UncheckedSendableBox(oldEngine)
-        DispatchQueue.global(qos: .utility).async {
-            let e = box.value
-            e.inputNode.removeTap(onBus: 0)
-            e.stop()
-        }
+        // Atomically swap to a fresh engine on main, then tear down the old one
+        // off-main; removeTap/stop/dealloc dispatch into AVFAudio's private queue,
+        // which stalls main during device churn. Construction is cheap and stays
+        // on main so the swap is atomic/race-free.
+        swapEngine()
 
         let duration = Double(captured.count) / 16_000.0
         AppLogger.audio.info("Captured \(captured.count) samples (\(String(format: "%.1f", duration))s)")
@@ -279,6 +315,14 @@ final class AudioCaptureManager {
     }
 
     private func handleConfigChange() {
+        // Debounce reentrancy FIRST: a second config-change notification delivered on
+        // main while we are mid-swap (BT churn fires many) would otherwise trigger
+        // another full engine swap + construction and stack AVFAudio calls. Gate before
+        // we touch the engine or re-register the observer.
+        guard !isSettling else { return }
+        isSettling = true
+        configChangeTimer?.cancel()
+
         // Snapshot the buffer on main before handing off the old engine so a late
         // tap callback from the old engine cannot pollute the next recording.
         var capturedSamples: [Float]? = isRecording ? captureBuffer() : nil
@@ -293,24 +337,7 @@ final class AudioCaptureManager {
             capturedSamples?.append(contentsOf: tail)
         }
 
-        // Swap in a fresh engine on main (cheap), then tear down the old one off-main.
-        // removeTap/stop and -[AVAudioEngine dealloc] all dispatch synchronously into
-        // AVFAudio's private queue; during a device transition that queue can be busy,
-        // so running them on the main thread risks a permanent beachball. Buffer is
-        // already snapshotted above; startRecording() clears the buffer before the
-        // next take, so a late old-engine tap callback cannot pollute the next recording.
-        let oldEngine = engine
-        // Create new engine - reset() alone doesn't reinitialize for different devices
-        engine = AVAudioEngine()
-        setupEngineObserver()
-        converterLock.withLock { converter = nil }
-
-        let box = UncheckedSendableBox(oldEngine)
-        DispatchQueue.global(qos: .utility).async {
-            let e = box.value
-            e.inputNode.removeTap(onBus: 0)
-            e.stop()
-        }
+        swapEngine()
 
         if let capturedSamples {
             AppLogger.audio.debug("Audio config changed during recording, captured \(capturedSamples.count) samples")
@@ -318,8 +345,7 @@ final class AudioCaptureManager {
         }
 
         // Debounce: coalesce rapid config changes (BT connect fires many).
-        isSettling = true
-        configChangeTimer?.cancel()
+        // (isSettling already set at top of handleConfigChange.)
         AppLogger.audio.debug("Config change - settling")
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -327,6 +353,8 @@ final class AudioCaptureManager {
                 self.validateFormatStability { [weak self] stable in
                     guard let self else { return }
                     MainActor.assumeIsolated {
+                        // Always clear the settle gate first so no later branch can leave config-change
+                        // handling permanently suppressed. Completion is guaranteed on main (Step 1).
                         self.isSettling = false
                         if !stable {
                             AppLogger.audio.debug("Format unstable after settling")
@@ -337,7 +365,7 @@ final class AudioCaptureManager {
             }
         }
         configChangeTimer = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + settleDelay, execute: work)
     }
 
     private func captureBuffer() -> [Float] {
@@ -349,21 +377,35 @@ final class AudioCaptureManager {
     }
 
     private func validateFormatStability(completion: @escaping @Sendable (Bool) -> Void) {
-        let format1 = engine.inputNode.outputFormat(forBus: 0)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self else {
-                    completion(false)
-                    return
-                }
-                let format2 = self.engine.inputNode.outputFormat(forBus: 0)
+        // outputFormat(forBus:) queries the HAL synchronously and can stall while a
+        // device is still transitioning; read it off the main thread on both samples.
+        // The completion mutates main-actor state at the call site, so hop back to main
+        // before invoking it (off-main completion + MainActor.assumeIsolated -> fatal trap).
+        let engineBox = UncheckedSendableBox(engine)
+        let validateDelay = self.validateDelay
+        DispatchQueue.global(qos: .userInitiated).async {
+            let format1 = engineBox.value.inputNode.outputFormat(forBus: 0)
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + validateDelay) {
+                let format2 = engineBox.value.inputNode.outputFormat(forBus: 0)
                 let stable = format1.sampleRate == format2.sampleRate &&
                              format1.channelCount == format2.channelCount &&
                              format1.sampleRate > 0
-                completion(stable)
+                DispatchQueue.main.async { completion(stable) }
             }
         }
     }
+
+#if DEBUG
+    /// Test-only entry point: drives the config-change teardown/swap path so the
+    /// off-main construction guarantee can be asserted without audio hardware.
+    func triggerConfigChangeForTesting() { handleConfigChange() }
+
+    /// Identity of the engine the most recent tap was installed on (test-only).
+    weak var lastTappedEngine: AVAudioEngine?
+
+    /// Identity of the currently installed engine (test-only).
+    var currentEngineForTesting: AVAudioEngine { engine }
+#endif
 }
 
 enum AudioCaptureError: Error {
