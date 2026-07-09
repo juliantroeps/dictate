@@ -60,6 +60,7 @@ final class DictationCoordinator {
     private let transcriptionTimeout: Duration
     private let injectText: @MainActor (String) -> TextInjector.Result
     private let hasInjectableTarget: @MainActor () -> Bool
+    private let copyToClipboard: @MainActor (String) -> Void
     private let muteController: MuteController
     let runtimeState: DictationRuntimeState
 
@@ -73,6 +74,7 @@ final class DictationCoordinator {
         transcriptionTimeout: Duration = .seconds(30),
         injectText: @escaping @MainActor (String) -> TextInjector.Result = TextInjector.inject,
         hasInjectableTarget: @escaping @MainActor () -> Bool = TextInjector.hasInjectableTarget,
+        copyToClipboard: @escaping @MainActor (String) -> Void = { TextInjector.copyToClipboard($0) },
         muteController: MuteController = .system
     ) {
         self.audioCapture = audioCapture
@@ -84,6 +86,7 @@ final class DictationCoordinator {
         self.transcriptionTimeout = transcriptionTimeout
         self.injectText = injectText
         self.hasInjectableTarget = hasInjectableTarget
+        self.copyToClipboard = copyToClipboard
         self.muteController = muteController
 
         self.engineCoordinator.onReady = { [weak self] in self?.flushPendingSamples() }
@@ -251,6 +254,7 @@ final class DictationCoordinator {
         let overlay = self.overlay
         let injectText = self.injectText
         let hasInjectableTarget = self.hasInjectableTarget
+        let copyToClipboard = self.copyToClipboard
         let runtimeState = self.runtimeState
         let transcriptionTimeout = self.transcriptionTimeout
 
@@ -284,10 +288,18 @@ final class DictationCoordinator {
                     return
                 }
 
-                if settings.noFocusBehavior == .discard, !hasInjectableTarget() {
-                    AppLogger.input.info("No text field and discard mode - dropping dictation without touching clipboard")
-                    overlay.hide()
-                    return
+                if !hasInjectableTarget() {
+                    switch settings.noFocusBehavior {
+                    case .discard:
+                        AppLogger.input.info("No text field and discard mode - dropping dictation without touching clipboard")
+                        overlay.hide()
+                        return
+                    case .clipboard:
+                        AppLogger.input.info("No text field and clipboard mode - copying dictation to clipboard")
+                        copyToClipboard(text)
+                        overlay.showInfo("Copied to clipboard", duration: 2.0)
+                        return
+                    }
                 }
 
                 let result = injectText(text)

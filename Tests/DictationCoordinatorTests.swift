@@ -95,7 +95,8 @@ struct DictationCoordinatorTests {
             injectText: { text in
                 injectedTexts.append(text)
                 return .injected
-            }
+            },
+            hasInjectableTarget: { true }
         )
 
         coordinator.handleKeyDown()
@@ -139,7 +140,8 @@ struct DictationCoordinatorTests {
             injectText: { text in
                 injectedTexts.append(text)
                 return .injected
-            }
+            },
+            hasInjectableTarget: { true }
         )
 
         let minSamples = Int(settings.minHoldDuration * 16000) + 1
@@ -217,7 +219,8 @@ struct DictationCoordinatorTests {
             injectText: { text in
                 injectedTexts.append(text)
                 return .injected
-            }
+            },
+            hasInjectableTarget: { true }
         )
 
         // First key-up while not ready -> buffers samples.
@@ -660,7 +663,7 @@ struct DictationCoordinatorTests {
     }
 
     @Test @MainActor
-    func clipboardModeAlwaysInjects() async {
+    func clipboardModeWithNoTarget_copiesInsteadOfInjecting() async {
         let settings = FakeDictationSettings()
         settings.minHoldDuration = 0.1
         settings.muteSystemAudio = false
@@ -672,6 +675,7 @@ struct DictationCoordinatorTests {
         let engine = FakeTranscriptionEngineCoordinator()
         engine.isReady = true
         var injectedTexts: [String] = []
+        var copiedTexts: [String] = []
 
         let coordinator = DictationCoordinator(
             audioCapture: audioCapture,
@@ -681,9 +685,10 @@ struct DictationCoordinatorTests {
             now: { DispatchTime(uptimeNanoseconds: currentTime) },
             injectText: { text in
                 injectedTexts.append(text)
-                return .copiedToClipboard
+                return .injected
             },
-            hasInjectableTarget: { false }
+            hasInjectableTarget: { false },
+            copyToClipboard: { text in copiedTexts.append(text) }
         )
 
         coordinator.handleKeyDown()
@@ -692,7 +697,50 @@ struct DictationCoordinatorTests {
 
         await coordinator.runtimeState.transcriptionTask?.value
 
-        #expect(injectedTexts.count == 1)
+        #expect(injectedTexts.isEmpty)
+        #expect(copiedTexts == ["transcribed text"])
+        #expect(overlay.shownInfos == ["Copied to clipboard"])
+        #expect(overlay.state.phase == .info("Copied to clipboard"))
+    }
+
+    @Test @MainActor
+    func clipboardModeWithTarget_injectsNormally() async {
+        let settings = FakeDictationSettings()
+        settings.minHoldDuration = 0.1
+        settings.muteSystemAudio = false
+        settings.noFocusBehavior = .clipboard
+
+        var currentTime: UInt64 = 1_000_000_000
+        let audioCapture = FakeAudioCaptureManager()
+        let overlay = FakeOverlayController()
+        let engine = FakeTranscriptionEngineCoordinator()
+        engine.isReady = true
+        var injectedTexts: [String] = []
+        var copiedTexts: [String] = []
+
+        let coordinator = DictationCoordinator(
+            audioCapture: audioCapture,
+            overlay: overlay,
+            engineCoordinator: engine,
+            settings: settings,
+            now: { DispatchTime(uptimeNanoseconds: currentTime) },
+            injectText: { text in
+                injectedTexts.append(text)
+                return .injected
+            },
+            hasInjectableTarget: { true },
+            copyToClipboard: { text in copiedTexts.append(text) }
+        )
+
+        coordinator.handleKeyDown()
+        currentTime += 500_000_000
+        coordinator.handleKeyUp()
+
+        await coordinator.runtimeState.transcriptionTask?.value
+
+        #expect(injectedTexts == ["transcribed text"])
+        #expect(copiedTexts.isEmpty)
+        #expect(overlay.shownInfos.isEmpty)
         #expect(overlay.state.phase == .idle)
     }
 
@@ -934,6 +982,7 @@ struct DictationCoordinatorTests {
             settings: settings,
             now: { DispatchTime(uptimeNanoseconds: currentTime) },
             injectText: { _ in .pasted },
+            hasInjectableTarget: { true },
         )
 
         coordinator.handleKeyDown()

@@ -10,12 +10,18 @@ enum TextInjectionStrategy: String {
 
 @MainActor
 struct ClipboardRestorer {
+    private let pasteboard: NSPasteboard
     private let savedItems: [NSPasteboardItem]
 
     init(pasteboard: NSPasteboard = .general) {
+        self.pasteboard = pasteboard
         savedItems = (pasteboard.pasteboardItems ?? []).map { item -> NSPasteboardItem in
             let copy = NSPasteboardItem()
             for type in item.types {
+                // Skip promise-backed types (e.g. file-promise providers) - materializing
+                // their data via `data(forType:)` resolves the promise on the main thread,
+                // which we don't want just to snapshot the pasteboard for restore.
+                if type.rawValue.lowercased().contains("promise") { continue }
                 if let data = item.data(forType: type) {
                     copy.setData(data, forType: type)
                 }
@@ -24,11 +30,19 @@ struct ClipboardRestorer {
         }
     }
 
+    /// Callers construct the restorer BEFORE overwriting the pasteboard with the
+    /// dictation (to snapshot the prior contents), then call `restore()` AFTER the
+    /// write - so `pasteboard.changeCount` here is the post-write count. If the
+    /// count differs when the delay elapses, our write is no longer on top (a
+    /// concurrent copy landed, or the user copied something else) and restoring
+    /// would clobber it, so we skip.
     func restore(after delay: Duration = .milliseconds(350)) {
         let savedItems = savedItems
+        let pasteboard = pasteboard
+        let savedChangeCount = pasteboard.changeCount
         Task { @MainActor in
             try? await Task.sleep(for: delay)
-            let pasteboard = NSPasteboard.general
+            guard pasteboard.changeCount == savedChangeCount else { return }
             pasteboard.clearContents()
             if !savedItems.isEmpty {
                 pasteboard.writeObjects(savedItems)
