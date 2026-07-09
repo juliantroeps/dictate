@@ -136,24 +136,48 @@ final class FakeTranscriptionEngineCoordinator: TranscriptionEngineCoordinating 
 }
 
 /// Test double for MuteController - tracks calls and supports per-device state.
-@MainActor
-final class FakeMuteController {
-    var currentDevice: AudioDeviceID? = 1
+/// Thread-safe: MuteController's closures now run off the main actor (see
+/// DictationCoordinator.performMuteApply), so all mutable state is lock-guarded.
+/// Public surface (property names/types) is unchanged from the pre-lock version.
+final class FakeMuteController: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _currentDevice: AudioDeviceID? = 1
+    private var _mutedState: [AudioDeviceID: Bool] = [:]
+    private var _settable: Set<AudioDeviceID> = [1]
+    private var _calls: [(muted: Bool, device: AudioDeviceID)] = []
+
+    var currentDevice: AudioDeviceID? {
+        get { lock.withLock { _currentDevice } }
+        set { lock.withLock { _currentDevice = newValue } }
+    }
+
     /// Current mute state per device. Starts unmuted by default.
-    var mutedState: [AudioDeviceID: Bool] = [:]
+    var mutedState: [AudioDeviceID: Bool] {
+        get { lock.withLock { _mutedState } }
+        set { lock.withLock { _mutedState = newValue } }
+    }
+
     /// Set of device IDs where mute is settable.
-    var settable: Set<AudioDeviceID> = [1]
+    var settable: Set<AudioDeviceID> {
+        get { lock.withLock { _settable } }
+        set { lock.withLock { _settable = newValue } }
+    }
+
     /// Ordered log of (muted, deviceID) calls to setMuted.
-    private(set) var calls: [(muted: Bool, device: AudioDeviceID)] = []
+    var calls: [(muted: Bool, device: AudioDeviceID)] {
+        lock.withLock { _calls }
+    }
 
     func makeController() -> MuteController {
         MuteController(
-            currentDeviceID: { [unowned self] in self.currentDevice },
-            isMuted: { [unowned self] id in self.mutedState[id] ?? false },
-            isSettable: { [unowned self] id in self.settable.contains(id) },
-            setMuted: { [unowned self] muted, id in
-                self.calls.append((muted: muted, device: id))
-                self.mutedState[id] = muted
+            currentDeviceID: { [self] in lock.withLock { _currentDevice } },
+            isMuted: { [self] id in lock.withLock { _mutedState[id] ?? false } },
+            isSettable: { [self] id in lock.withLock { _settable.contains(id) } },
+            setMuted: { [self] muted, id in
+                lock.withLock {
+                    _calls.append((muted: muted, device: id))
+                    _mutedState[id] = muted
+                }
             }
         )
     }

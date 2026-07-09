@@ -395,6 +395,7 @@ struct DictationCoordinatorTests {
         )
 
         coordinator.handleKeyDown()
+        await coordinator.runtimeState.muteTask?.value
         currentTime += 500_000_000
         coordinator.handleKeyUp()
 
@@ -415,7 +416,7 @@ struct DictationCoordinatorTests {
     // MARK: - Mute lifecycle tests
 
     @Test @MainActor
-    func muteHappyPathRestoresUnmuted() {
+    func muteHappyPathRestoresUnmuted() async {
         let settings = FakeDictationSettings()
         settings.minHoldDuration = 0.1
         settings.muteSystemAudio = true
@@ -438,6 +439,8 @@ struct DictationCoordinatorTests {
         )
 
         coordinator.handleKeyDown()
+        // applyMuteIfNeeded's HAL now runs off-main; wait for it before key-up.
+        await coordinator.runtimeState.muteTask?.value
         currentTime += 500_000_000
         coordinator.handleKeyUp()
 
@@ -448,7 +451,7 @@ struct DictationCoordinatorTests {
     }
 
     @Test @MainActor
-    func defaultDeviceChangesMidHold_originalDeviceRestored() {
+    func defaultDeviceChangesMidHold_originalDeviceRestored() async {
         let settings = FakeDictationSettings()
         settings.minHoldDuration = 0.1
         settings.muteSystemAudio = true
@@ -474,6 +477,8 @@ struct DictationCoordinatorTests {
         )
 
         coordinator.handleKeyDown()
+        // Wait for the off-main mute apply to capture device 1 before it changes.
+        await coordinator.runtimeState.muteTask?.value
         // Simulate AirPods disconnect - default device changes mid-hold
         fakeMute.currentDevice = 2
         currentTime += 500_000_000
@@ -512,6 +517,7 @@ struct DictationCoordinatorTests {
         )
 
         coordinator.handleKeyDown()
+        await coordinator.runtimeState.muteTask?.value
         await coordinator.runtimeState.recordingStartTask?.value
         // Muted device 1 on key-down.
         #expect(fakeMute.calls.count == 1)
@@ -530,6 +536,7 @@ struct DictationCoordinatorTests {
 
         // Stable re-arm while key still held must re-mute the NEW device 2.
         coordinator.handleAudioCaptureEvent(.inputConfigurationChanged(stable: true))
+        await coordinator.runtimeState.muteTask?.value
         await coordinator.runtimeState.recordingStartTask?.value
 
         #expect(fakeMute.calls.last?.muted == true)
@@ -538,7 +545,7 @@ struct DictationCoordinatorTests {
     }
 
     @Test @MainActor
-    func settingToggledOffMidHold_stillRestoresMute() {
+    func settingToggledOffMidHold_stillRestoresMute() async {
         let settings = FakeDictationSettings()
         settings.minHoldDuration = 0.1
         settings.muteSystemAudio = true
@@ -561,6 +568,7 @@ struct DictationCoordinatorTests {
         )
 
         coordinator.handleKeyDown()
+        await coordinator.runtimeState.muteTask?.value
         // Toggle setting off mid-hold
         settings.muteSystemAudio = false
         currentTime += 500_000_000
@@ -572,7 +580,7 @@ struct DictationCoordinatorTests {
     }
 
     @Test @MainActor
-    func priorMutePreserved_noCoordinator() {
+    func priorMutePreserved_noCoordinator() async {
         let settings = FakeDictationSettings()
         settings.minHoldDuration = 0.1
         settings.muteSystemAudio = true
@@ -596,6 +604,7 @@ struct DictationCoordinatorTests {
         )
 
         coordinator.handleKeyDown()
+        await coordinator.runtimeState.muteTask?.value
         currentTime += 500_000_000
         coordinator.handleKeyUp()
 
@@ -1257,7 +1266,7 @@ struct DictationCoordinatorTests {
     }
 
     @Test @MainActor
-    func nonSettableDevice_noMuteAttempt() {
+    func nonSettableDevice_noMuteAttempt() async {
         let settings = FakeDictationSettings()
         settings.minHoldDuration = 0.1
         settings.muteSystemAudio = true
@@ -1282,6 +1291,7 @@ struct DictationCoordinatorTests {
         )
 
         coordinator.handleKeyDown()
+        await coordinator.runtimeState.muteTask?.value
         currentTime += 500_000_000
         coordinator.handleKeyUp()
 

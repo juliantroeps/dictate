@@ -27,10 +27,41 @@ final class AudioCaptureManager {
     nonisolated(unsafe) var onEvent: ((AudioCaptureEvent) -> Void)?
     private var isRecording = false
     private var isSettling = false
+    // True for the whole span of startRecording(): prevents a config-change
+    // notification from calling swapEngine() while performEngineStart is running
+    // engine.start() off-main on that same engine. Without this guard, swapEngine's
+    // off-main teardown (engine.stop()/removeTap on a .utility queue) could run
+    // CONCURRENTLY with engine.start() on the .userInitiated queue - AVAudioEngine is
+    // not thread-safe, so that is a data race, and even if it didn't crash, self.engine
+    // would already point at a fresh untapped/unstarted engine by the time the await
+    // resumes, so flipping isRecording=true would mark a dead engine as recording
+    // (silent hot mic, re-arm no-ops via guard !isRecording).
+    private var isStarting = false
     private var configChangeTimer: DispatchWorkItem?
     // Stored nonisolated(unsafe) so deinit (nonisolated) can read it to deregister.
     // Written once in init before any concurrent access.
     nonisolated(unsafe) private var inputListenerBlock: AudioObjectPropertyListenerBlock = { _, _ in }
+
+    // Guards against a stale engine's tap: after swapEngine, the OLD engine keeps
+    // firing its installTap callback until the off-main teardown runs removeTap.
+    // Each tap closure captures the epoch current at install time; swapEngine bumps
+    // the epoch, so a lingering old-engine callback fails isCurrentEpoch and is
+    // dropped instead of appending old-device samples into the new self.buffer.
+    private let epochLock = NSLock()
+    nonisolated(unsafe) private var _tapEpoch: UInt64 = 0
+
+    private var currentEpoch: UInt64 {
+        epochLock.withLock { _tapEpoch }
+    }
+
+    private func bumpEpoch() {
+        epochLock.withLock { _tapEpoch += 1 }
+    }
+
+    // nonisolated so the tap closure (audio render thread) can call it directly.
+    nonisolated private func isCurrentEpoch(_ epoch: UInt64) -> Bool {
+        epochLock.withLock { _tapEpoch == epoch }
+    }
 
 #if DEBUG
     // Test-only timing seam: lets tests shrink the settle/validate windows so the
@@ -58,6 +89,10 @@ final class AudioCaptureManager {
     /// and does not hit that queue the way teardown does, so it stays on main to keep
     /// the swap atomic and race-free.
     private func swapEngine() {
+        // Bump first: any tap closure already installed on oldEngine captured the
+        // pre-bump epoch, so it goes stale immediately - before the old engine's
+        // (still-live) tap can fire again and pollute the fresh buffer/converter.
+        bumpEpoch()
         let oldEngine = engine
         engine = makeEngine()
         setupEngineObserver()
@@ -86,7 +121,14 @@ final class AudioCaptureManager {
             object: engine, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, !self.isSettling else { return }
+                guard let self else { return }
+                // Never swap out from under an in-flight startRecording() - see isStarting.
+                guard !self.isStarting else { return }
+                // Normally debounce reentrant config changes while settling. But if a
+                // hold started mid-settle and is now recording, still let this through -
+                // handleConfigChange's isSettling branch will interrupt the recording
+                // instead of leaving isRecording stuck true on a soon-to-be-dead engine.
+                guard !self.isSettling || self.isRecording else { return }
                 self.handleConfigChange()
             }
         }
@@ -113,9 +155,10 @@ final class AudioCaptureManager {
             DispatchQueue.main.async { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    // Skip during recording (AVAudioEngineConfigurationChange handles that)
-                    // and during settling (prevents BT HFP re-trigger loop).
-                    guard !self.isRecording, !self.isSettling else { return }
+                    // Skip during recording (AVAudioEngineConfigurationChange handles that),
+                    // during settling (prevents BT HFP re-trigger loop), and while a start is
+                    // in flight (never swap out from under it - see isStarting).
+                    guard !self.isRecording, !self.isSettling, !self.isStarting else { return }
                     self.handleConfigChange()
                 }
             }
@@ -130,18 +173,16 @@ final class AudioCaptureManager {
     func startRecording() async throws {
         guard !isRecording else { return }
 
+        // Held for the whole attempt loop so no config-change notification can
+        // swapEngine() the engine currently being started off-main - see isStarting.
+        isStarting = true
+        defer { isStarting = false }
+
         bufferLock.withLock { buffer.removeAll(keepingCapacity: true) }
 
         var lastError: Error = AudioCaptureError.noInputDevice
         for attempt in 1...5 {
             installRecordingTap()
-            engine.prepare()
-
-            let hwFormat = engine.inputNode.outputFormat(forBus: 0)
-            guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
-                engine.inputNode.removeTap(onBus: 0)
-                throw AudioCaptureError.noInputDevice
-            }
 
             // A key-up cancel may have landed during the retry-backoff sleep after
             // stopRecording() already no-op'd (isRecording was still false). Bail out
@@ -154,16 +195,33 @@ final class AudioCaptureManager {
                 throw CancellationError()
             }
 
-            do {
-                try engine.start()
+            // prepare() + the format probe + engine.start() are blocking HAL calls
+            // that can stall while a device is mid-transition (same class of stall
+            // validateFormatStability already documents); run them off main so a
+            // key-press during BT churn does not beachball the UI / delay the tap.
+            let outcome = await performEngineStart(engine)
+
+            if Task.isCancelled, case .started = outcome {
+                // Cancelled while the off-main start was in flight - roll back so a
+                // fast key-up race does not leave the mic hot.
+                engine.stop()
+                engine.inputNode.removeTap(onBus: 0)
+                throw CancellationError()
+            }
+
+            switch outcome {
+            case .started:
                 isRecording = true
                 AppLogger.audio.info("Recording started (attempt \(attempt))")
                 return
-            } catch {
-                lastError = error
+            case .noInputDevice:
+                engine.inputNode.removeTap(onBus: 0)
+                throw AudioCaptureError.noInputDevice
+            case .failed(let box):
+                lastError = box.value
                 engine.inputNode.removeTap(onBus: 0)
                 AppLogger.audio.error(
-                    "engine.start() failed attempt \(attempt): \(error)"
+                    "engine.start() failed attempt \(attempt): \(box.value)"
                 )
                 if attempt < 5 {
                     do {
@@ -178,17 +236,56 @@ final class AudioCaptureManager {
         throw lastError
     }
 
+    /// Outcome of an off-main engine-start attempt (see performEngineStart).
+    private enum EngineStartOutcome: Sendable {
+        case started
+        case noInputDevice
+        case failed(UncheckedSendableBox<Error>)
+    }
+
+    /// Runs prepare() + the input-format probe + engine.start() off the main actor
+    /// for a single attempt. nonisolated so the dispatch genuinely leaves the main
+    /// executor (an actor-isolated async func would just resume back on MainActor
+    /// without ever running its body elsewhere).
+    nonisolated private func performEngineStart(_ engine: AVAudioEngine) async -> EngineStartOutcome {
+        let box = UncheckedSendableBox(engine)
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let engine = box.value
+                engine.prepare()
+
+                let hwFormat = engine.inputNode.outputFormat(forBus: 0)
+                guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
+                    continuation.resume(returning: .noInputDevice)
+                    return
+                }
+
+                do {
+                    try engine.start()
+                    continuation.resume(returning: .started)
+                } catch {
+                    continuation.resume(returning: .failed(UncheckedSendableBox(error)))
+                }
+            }
+        }
+    }
+
     private func installRecordingTap() {
         converterLock.withLock { converter = nil }
         // Unconditional remove: clears any stale tap before installing a fresh one.
         engine.inputNode.removeTap(onBus: 0)
+        // Captured at install time: if swapEngine bumps the epoch before this
+        // closure's engine is torn down, its callbacks fail isCurrentEpoch and are
+        // dropped instead of appending stale-engine samples into the fresh buffer.
+        let epoch = currentEpoch
         // @Sendable strips the MainActor isolation this closure would otherwise
         // inherit from its enclosing @MainActor context. AVFAudio invokes the tap
         // block on its realtime audio thread; an isolated closure would trap in
         // Swift 6's executor precondition (swift_task_isCurrentExecutor ->
         // dispatch_assert_queue_fail). processAudioBuffer is nonisolated, so this is safe.
         engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { @Sendable [weak self] pcmBuffer, _ in
-            self?.processAudioBuffer(pcmBuffer)
+            guard let self, self.isCurrentEpoch(epoch) else { return }
+            self.processAudioBuffer(pcmBuffer)
         }
 #if DEBUG
         lastTappedEngine = engine
@@ -291,7 +388,13 @@ final class AudioCaptureManager {
         }
 
         if let error {
-            AppLogger.audio.error("Conversion error: \(error)")
+            // Do not log (OSLog + fputs + Sentry capture) from the realtime render
+            // thread. Format the message here (Sendable String), then hop the
+            // actual report to main instead of carrying the non-Sendable NSError.
+            let message = "Conversion error: \(error)"
+            DispatchQueue.main.async {
+                AppLogger.audio.error(message)
+            }
             return
         }
 
@@ -315,11 +418,25 @@ final class AudioCaptureManager {
     }
 
     private func handleConfigChange() {
-        // Debounce reentrancy FIRST: a second config-change notification delivered on
-        // main while we are mid-swap (BT churn fires many) would otherwise trigger
-        // another full engine swap + construction and stack AVFAudio calls. Gate before
-        // we touch the engine or re-register the observer.
-        guard !isSettling else { return }
+        // Reentrancy while already settling (BT churn fires many notifications, or a
+        // hold started mid-settle and the newly-swapped engine's config changed again).
+        // Debounce the swap/validate part - the in-flight settle timer still owns that
+        // and will still deliver .inputConfigurationChanged when it completes - but do
+        // not silently drop a live recording: without this, isRecording would stay true
+        // on an engine nobody will ever swap out of settling again (silent hot mic).
+        if isSettling {
+            guard isRecording else { return }
+            var capturedSamples = captureBuffer()
+            isRecording = false
+            let tail: [Float] = converterLock.withLock {
+                guard let converter else { return [] }
+                return AudioCaptureManager.drainConverterTail(converter)
+            }
+            capturedSamples.append(contentsOf: tail)
+            AppLogger.audio.debug("Config changed mid-settle, captured \(capturedSamples.count) samples")
+            onEvent?(.recordingInterrupted(samples: capturedSamples))
+            return
+        }
         isSettling = true
         configChangeTimer?.cancel()
 
@@ -405,6 +522,40 @@ final class AudioCaptureManager {
 
     /// Identity of the currently installed engine (test-only).
     var currentEngineForTesting: AVAudioEngine { engine }
+
+    /// Current tap epoch (test-only). See _tapEpoch.
+    var currentTapEpochForTesting: UInt64 { currentEpoch }
+
+    /// Runs the same isCurrentEpoch guard the real tap closure uses, then
+    /// processAudioBuffer, returning whether the callback was accepted
+    /// (test-only - lets the epoch guard be exercised without audio hardware).
+    func processTapCallbackForTesting(epoch: UInt64, _ buffer: AVAudioPCMBuffer) -> Bool {
+        guard isCurrentEpoch(epoch) else { return false }
+        processAudioBuffer(buffer)
+        return true
+    }
+
+    /// Forces isRecording (test-only - simulates a hold that started mid-settle).
+    func setRecordingForTesting(_ value: Bool) { isRecording = value }
+
+    /// Whether a config-change settle window is in flight (test-only).
+    var isSettlingForTesting: Bool { isSettling }
+
+    /// Forces isStarting (test-only - simulates a startRecording() attempt in flight,
+    /// without needing to race the real off-main engine.start() call).
+    func setStartingForTesting(_ value: Bool) { isStarting = value }
+
+    /// Whether a startRecording() attempt is currently in flight (test-only).
+    var isStartingForTesting: Bool { isStarting }
+
+    /// Mirrors the AVAudioEngineConfigurationChange observer's guard chain (including
+    /// the isStarting check) so the start-vs-swap race guard can be asserted without
+    /// posting a real NotificationCenter notification (test-only).
+    func triggerEngineConfigChangeNotificationForTesting() {
+        guard !isStarting else { return }
+        guard !isSettling || isRecording else { return }
+        handleConfigChange()
+    }
 #endif
 }
 

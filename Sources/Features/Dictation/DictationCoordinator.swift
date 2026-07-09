@@ -33,13 +33,14 @@ extension Settings: DictationSettingsProviding {}
 
 /// Injectable abstraction for system output mute operations.
 /// Uses a struct-of-closures to match the project's existing injection style.
-/// All closures are MainActor-bound since DictationCoordinator is MainActor.
-@MainActor
-struct MuteController {
-    var currentDeviceID: () -> AudioDeviceID?
-    var isMuted: (AudioDeviceID) -> Bool
-    var isSettable: (AudioDeviceID) -> Bool
-    var setMuted: (Bool, AudioDeviceID) -> Void
+/// Not MainActor-bound: the closures wrap nonisolated SystemAudioController HAL
+/// calls and are invoked off the main actor (see DictationCoordinator.performMuteApply)
+/// so a key-down does not block on blocking AudioObject*PropertyData calls.
+struct MuteController: Sendable {
+    var currentDeviceID: @Sendable () -> AudioDeviceID?
+    var isMuted: @Sendable (AudioDeviceID) -> Bool
+    var isSettable: @Sendable (AudioDeviceID) -> Bool
+    var setMuted: @Sendable (Bool, AudioDeviceID) -> Void
 
     /// Default implementation wired to SystemAudioController.
     static let system = MuteController(
@@ -106,19 +107,61 @@ final class DictationCoordinator {
     }
 
     /// Apply system-output mute for the current default device if the user enabled
-    /// it and the device is settable. Records activeMute only when we actually mute
-    /// (i.e. the user had not already muted it deliberately).
+    /// it and the device is settable. The blocking HAL calls run off the main actor
+    /// (performMuteApply) so key-down handling stays snappy during device churn;
+    /// the result is applied back on main only if the key is still held - a fast
+    /// key-up may already have restored/no-op'd while this was in flight.
     private func applyMuteIfNeeded() {
-        if settings.muteSystemAudio,
-           let deviceID = muteController.currentDeviceID(),
-           muteController.isSettable(deviceID) {
-            let priorMuted = muteController.isMuted(deviceID)
-            if !priorMuted {
-                // Only mute if the user hasn't already muted - don't clobber deliberate mutes.
-                muteController.setMuted(true, deviceID)
-                runtimeState.activeMute = ActiveMute(deviceID: deviceID, priorMuted: priorMuted)
+        guard settings.muteSystemAudio else { return }
+        let muteController = self.muteController
+        runtimeState.muteTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let result = await self.performMuteApply(muteController) else { return }
+            guard self.runtimeState.keyHeld else {
+                // Key released while the apply was in flight - undo any mute we just
+                // applied off-main so the device does not stay muted after the hold ended.
+                if !result.priorMuted {
+                    muteController.setMuted(false, result.deviceID)
+                }
+                return
             }
-            // If already muted, leave activeMute nil - key-up will no-op correctly.
+            if !result.priorMuted {
+                // Only record activeMute if we actually muted - don't clobber a
+                // deliberate user mute (priorMuted == true means we left it alone).
+                self.runtimeState.activeMute = ActiveMute(deviceID: result.deviceID, priorMuted: result.priorMuted)
+            }
+        }
+    }
+
+    /// Outcome of an off-main mute apply: the targeted device and whether it was
+    /// already muted before we touched it. nil (not settable) is handled by the
+    /// caller reading an Optional return from performMuteApply.
+    private struct MuteApplyResult: Sendable {
+        let deviceID: AudioDeviceID
+        let priorMuted: Bool
+    }
+
+    /// Runs currentDeviceID/isSettable/isMuted/setMuted off the main actor.
+    /// AudioObject*PropertyData calls block synchronously and can stall while a
+    /// device is mid-transition (mirrors AudioCaptureManager's HAL-off-main
+    /// pattern); doing this on main at every key-down would beachball the UI
+    /// during Bluetooth churn. nonisolated so the dispatch genuinely leaves main.
+    nonisolated private func performMuteApply(_ muteController: MuteController) async -> MuteApplyResult? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                guard let deviceID = muteController.currentDeviceID(),
+                    muteController.isSettable(deviceID)
+                else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let priorMuted = muteController.isMuted(deviceID)
+                if !priorMuted {
+                    // Only mute if the user hasn't already muted - don't clobber deliberate mutes.
+                    muteController.setMuted(true, deviceID)
+                }
+                continuation.resume(returning: MuteApplyResult(deviceID: deviceID, priorMuted: priorMuted))
+            }
         }
     }
 
@@ -146,6 +189,8 @@ final class DictationCoordinator {
         runtimeState.transcriptionGeneration += 1
         runtimeState.recordingStartTask?.cancel()
         runtimeState.recordingStartTask = nil
+        runtimeState.muteTask?.cancel()
+        runtimeState.muteTask = nil
         // Discard any stale pending buffer from a prior not-ready key-up - a fresh
         // session starting means we'll capture new audio from scratch.
         runtimeState.pendingSamples = nil
@@ -175,6 +220,12 @@ final class DictationCoordinator {
         runtimeState.keyHeld = false
         runtimeState.recordingStartTask?.cancel()
         runtimeState.recordingStartTask = nil
+        // Cancel (and clear keyHeld above) BEFORE restoreMuteIfNeeded: an
+        // applyMuteIfNeeded task still in flight sees !keyHeld on its main-hop and
+        // undoes its own mute, so the sync restore below and that undo can't race
+        // each other into leaving the device muted.
+        runtimeState.muteTask?.cancel()
+        runtimeState.muteTask = nil
 
         restoreMuteIfNeeded()
 
