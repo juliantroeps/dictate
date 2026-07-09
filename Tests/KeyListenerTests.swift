@@ -66,6 +66,35 @@ struct KeyListenerTests {
     }
 
     @Test
+    func stopWhileHeldSynthesizesSingleKeyUp() {
+        let listener = KeyListener()
+        var keyUpCount = 0
+        listener.onKeyUp = { keyUpCount += 1 }
+
+        // Simulate Fn held down (e.g. across a sleep/wake restart).
+        listener.handleEvent(type: .flagsChanged, event: makeFlagsEvent(fnPressed: true))
+        #expect(listener.fnDown == true)
+
+        // stop() must synthesize exactly one release so mic/mute state isn't leaked.
+        listener.stop()
+        #expect(keyUpCount == 1)
+        #expect(listener.fnDown == false)
+    }
+
+    @Test
+    func stopWhileNotHeldFiresNothing() {
+        let listener = KeyListener()
+        var keyUpCount = 0
+        listener.onKeyUp = { keyUpCount += 1 }
+
+        #expect(listener.fnDown == false)
+
+        listener.stop()
+        #expect(keyUpCount == 0)
+        #expect(listener.fnDown == false)
+    }
+
+    @Test
     func normalFnDownUpCycleStillFires() {
         let listener = KeyListener()
         var keyDownCount = 0
