@@ -32,6 +32,13 @@ final class OverlayController {
         if window == nil { setupWindow() }
         guard let window else { return }
 
+        // Re-assert level + collection behavior on every show. A reused window
+        // can get "stuck" to the space it was last shown on, so the window
+        // server won't promote it onto another app's full-screen space even
+        // though `.canJoinAllSpaces` says it should. Re-setting these forces a
+        // space-membership re-evaluation - the same thing an app restart does.
+        applyWindowBehavior(window)
+
         positionWindow(window)
         window.alphaValue = 0
         window.orderFrontRegardless()
@@ -109,12 +116,28 @@ final class OverlayController {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
-        window.level = .screenSaver
         window.ignoresMouseEvents = true
-        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         window.contentView = hostingView
+        applyWindowBehavior(window)
 
         self.window = window
+    }
+
+    /// Window level + collection behavior that float the pill above other apps,
+    /// including their full-screen spaces. Re-applied on every `show()` so a
+    /// reused window can't stay bound to a stale space.
+    ///
+    /// Config mirrors AltTab's floating panel (the one verifiable production
+    /// reference): `.canJoinAllSpaces` is what actually joins another app's
+    /// full-screen space - level only controls z-order within a space, never
+    /// space membership. We deliberately avoid `.screenSaver` (the highest
+    /// level can interfere with full-screen drawing per Apple Forums 26677)
+    /// and `.fullScreenAuxiliary` (binds to one full-screen space rather than
+    /// floating over any). `.popUpMenu` clears the menu bar; `.stationary`
+    /// keeps the pill out of Mission Control.
+    private func applyWindowBehavior(_ window: NSWindow) {
+        window.level = .popUpMenu
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary]
     }
 
     private func positionWindow(_ window: NSWindow) {
