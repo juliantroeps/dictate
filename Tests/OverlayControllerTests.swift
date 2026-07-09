@@ -68,9 +68,9 @@ struct OverlayControllerTests {
         )
 
         // show() -> hide() (schedules fade-orderOut capturing gen=2) -> show() again (gen=3).
-        overlay.show()   // gen 1
-        overlay.hide()   // gen 2, appends fade closure at index 0
-        overlay.show()   // gen 3
+        overlay.show()  // gen 1
+        overlay.hide()  // gen 2, appends fade closure at index 0
+        overlay.show()  // gen 3
 
         #expect(scheduledWork.count == 1)
 
@@ -134,7 +134,7 @@ struct OverlayControllerTests {
     func hide_resetsPhaseToIdle() {
         let overlay = OverlayController(
             scheduleAfter: { _, _ in },
-            onOrderOut: { }
+            onOrderOut: {}
         )
         overlay.state.phase = .recording
         overlay.hide()
@@ -168,7 +168,7 @@ struct OverlayControllerTests {
         #expect(overlay.showCount == 1)
 
         // Short release (below minHoldDuration).
-        currentTime += 100_000_000 // 0.1s < 0.4s
+        currentTime += 100_000_000  // 0.1s < 0.4s
         coordinator.handleKeyUp()
         #expect(overlay.hideCount == 1)
 

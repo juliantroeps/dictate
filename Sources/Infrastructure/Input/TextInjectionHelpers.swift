@@ -1,5 +1,5 @@
-@preconcurrency import ApplicationServices
 import AppKit
+@preconcurrency import ApplicationServices
 import Foundation
 
 enum TextInjectionStrategy: String {
@@ -95,7 +95,8 @@ enum FocusedTextElementLocator {
 
     static func selectedTextRange(of element: AXUIElement) -> CFRange? {
         var rangeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success else { return nil }
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success
+        else { return nil }
         var range = CFRange(location: 0, length: 0)
         guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &range) else { return nil }
         return range
@@ -106,7 +107,8 @@ enum FocusedTextElementLocator {
         for _ in 0..<20 {
             var parentRef: CFTypeRef?
             guard AXUIElementCopyAttributeValue(current, kAXParentAttribute as CFString, &parentRef) == .success,
-                  let parent = parentRef else { break }
+                let parent = parentRef
+            else { break }
             let axParent = parent as! AXUIElement
             var roleRef: CFTypeRef?
             AXUIElementCopyAttributeValue(axParent, kAXRoleAttribute as CFString, &roleRef)
@@ -123,9 +125,9 @@ enum TextSplice {
         let nsValue = value as NSString
         let length = nsValue.length
         guard range.location >= 0,
-              range.length >= 0,
-              range.location <= length,
-              length - range.location >= range.length
+            range.length >= 0,
+            range.location <= length,
+            length - range.location >= range.length
         else { return nil }
         return nsValue.replacingCharacters(
             in: NSRange(location: range.location, length: range.length),
@@ -138,13 +140,15 @@ enum ValueSpliceInjector {
     static func inject(element: AXUIElement, text: String) -> Bool {
         var valueRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef) == .success,
-              let currentValue = valueRef as? String else { return false }
+            let currentValue = valueRef as? String
+        else { return false }
 
         guard let range = FocusedTextElementLocator.selectedTextRange(of: element) else { return false }
 
         guard let newValue = TextSplice.splice(value: currentValue, range: range, with: text) else { return false }
 
-        guard AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, newValue as CFTypeRef) == .success else { return false }
+        guard AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, newValue as CFTypeRef) == .success
+        else { return false }
 
         let newCursorPos = range.location + text.utf16.count
         var newRange = CFRange(location: newCursorPos, length: 0)
@@ -153,7 +157,8 @@ enum ValueSpliceInjector {
         }
 
         guard let afterRange = FocusedTextElementLocator.selectedTextRange(of: element),
-              afterRange.location == newCursorPos, afterRange.length == 0 else {
+            afterRange.location == newCursorPos, afterRange.length == 0
+        else {
             return false
         }
 

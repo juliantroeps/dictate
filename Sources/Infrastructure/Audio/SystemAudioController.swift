@@ -24,8 +24,11 @@ enum SystemAudioController {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &deviceID) == noErr,
-              deviceID != 0 else { return nil }
+        guard
+            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &deviceID)
+                == noErr,
+            deviceID != 0
+        else { return nil }
         return deviceName(for: deviceID)
     }
 
@@ -37,8 +40,11 @@ enum SystemAudioController {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &deviceID) == noErr,
-              deviceID != 0 else { return nil }
+        guard
+            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &deviceID)
+                == noErr,
+            deviceID != 0
+        else { return nil }
         return deviceID
     }
 
@@ -49,12 +55,16 @@ enum SystemAudioController {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size) == noErr else {
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size) == noErr
+        else {
             return []
         }
         let count = Int(size) / MemoryLayout<AudioDeviceID>.size
         var deviceIDs = [AudioDeviceID](repeating: 0, count: count)
-        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &deviceIDs) == noErr else {
+        guard
+            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &deviceIDs)
+                == noErr
+        else {
             return []
         }
         return deviceIDs.compactMap { deviceID -> (id: AudioDeviceID, name: String)? in
@@ -69,7 +79,8 @@ enum SystemAudioController {
                 mElement: kAudioObjectPropertyElementMain
             )
             guard AudioObjectGetPropertyDataSize(deviceID, &streamAddr, 0, nil, &streamSize) == noErr,
-                  streamSize > 0 else { return nil }
+                streamSize > 0
+            else { return nil }
             guard let name = deviceName(for: deviceID) else { return nil }
             return (id: deviceID, name: name)
         }
@@ -91,8 +102,7 @@ enum SystemAudioController {
 
     static func isDeviceBluetooth(_ deviceID: AudioDeviceID) -> Bool {
         let transport = transportType(for: deviceID)
-        return transport == kAudioDeviceTransportTypeBluetooth ||
-               transport == kAudioDeviceTransportTypeBluetoothLE
+        return transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
     }
 
     static var builtInInputDeviceID: AudioDeviceID? {
@@ -119,7 +129,8 @@ enum SystemAudioController {
         )
         var nameRef: Unmanaged<CFString>?
         guard AudioObjectGetPropertyData(deviceID, &nameAddr, 0, nil, &nameSize, &nameRef) == noErr,
-              let name = nameRef?.takeRetainedValue() else { return nil }
+            let name = nameRef?.takeRetainedValue()
+        else { return nil }
         return name as String
     }
 
@@ -133,7 +144,8 @@ enum SystemAudioController {
         var uidRef: Unmanaged<CFString>?
         var size = UInt32(MemoryLayout<CFString>.size)
         guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &uidRef) == noErr,
-              let uid = uidRef?.takeRetainedValue() else {
+            let uid = uidRef?.takeRetainedValue()
+        else {
             return nil
         }
         return uid as String

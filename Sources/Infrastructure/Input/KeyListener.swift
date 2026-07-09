@@ -13,19 +13,21 @@ final class KeyListener {
         let eventMask = CGEventMask(1 << CGEventType.flagsChanged.rawValue)
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
 
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .listenOnly,
-            eventsOfInterest: eventMask,
-            callback: { _, type, event, userInfo in
-                guard let userInfo else { return Unmanaged.passUnretained(event) }
-                let listener = Unmanaged<KeyListener>.fromOpaque(userInfo).takeUnretainedValue()
-                listener.handleEvent(type: type, event: event)
-                return Unmanaged.passUnretained(event)
-            },
-            userInfo: selfPtr
-        ) else {
+        guard
+            let tap = CGEvent.tapCreate(
+                tap: .cgSessionEventTap,
+                place: .headInsertEventTap,
+                options: .listenOnly,
+                eventsOfInterest: eventMask,
+                callback: { _, type, event, userInfo in
+                    guard let userInfo else { return Unmanaged.passUnretained(event) }
+                    let listener = Unmanaged<KeyListener>.fromOpaque(userInfo).takeUnretainedValue()
+                    listener.handleEvent(type: type, event: event)
+                    return Unmanaged.passUnretained(event)
+                },
+                userInfo: selfPtr
+            )
+        else {
             AppLogger.app.error("Failed to create event tap. Accessibility permission may not be granted.")
             return false
         }

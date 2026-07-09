@@ -11,7 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settings = Settings.shared
     private let runtimeState = DictationRuntimeState()
     private lazy var audioDeviceCoordinator = AudioDeviceCoordinator(settings: settings, overlay: overlay)
-    private lazy var engineCoordinator = EngineCoordinator(settings: settings, overlay: overlay, runtimeState: runtimeState)
+    private lazy var engineCoordinator = EngineCoordinator(
+        settings: settings, overlay: overlay, runtimeState: runtimeState)
     private lazy var dictationCoordinator = DictationCoordinator(
         audioCapture: audioCapture,
         overlay: overlay,

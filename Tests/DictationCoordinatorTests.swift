@@ -426,7 +426,7 @@ struct DictationCoordinatorTests {
         let overlay = FakeOverlayController()
         let engine = FakeTranscriptionEngineCoordinator()
         let fakeMute = FakeMuteController()
-        fakeMute.mutedState[1] = false // device 1 starts unmuted
+        fakeMute.mutedState[1] = false  // device 1 starts unmuted
 
         let coordinator = DictationCoordinator(
             audioCapture: audioCapture,
@@ -1124,7 +1124,7 @@ struct DictationCoordinatorTests {
         )
 
         coordinator.handleKeyDown()
-        currentTime += 100_000_000 // < minHoldDuration (0.1s = 100ms, exactly at boundary - use less)
+        currentTime += 100_000_000  // < minHoldDuration (0.1s = 100ms, exactly at boundary - use less)
 
         // Short sample count - below minSamples threshold
         coordinator.handleRecordingInterrupted(samples: [0.1])

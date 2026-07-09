@@ -315,7 +315,8 @@ final class DictationCoordinator {
         }
 
         guard engineCoordinator.isReady else {
-            AppLogger.transcription.info("Engine not ready during interruption; buffering \(samples.count) samples for flush on ready")
+            AppLogger.transcription.info(
+                "Engine not ready during interruption; buffering \(samples.count) samples for flush on ready")
             runtimeState.pendingSamples = samples
             overlay.showModelLoading()
             engineCoordinator.prepare(attempts: 1)
@@ -323,7 +324,8 @@ final class DictationCoordinator {
         }
 
         let duration = Double(samples.count) / 16_000.0
-        AppLogger.audio.info("Transcribing interrupted recording: \(samples.count) samples (\(String(format: "%.1f", duration))s)")
+        AppLogger.audio.info(
+            "Transcribing interrupted recording: \(samples.count) samples (\(String(format: "%.1f", duration))s)")
 
         overlay.state.phase = .processing
 
@@ -370,7 +372,8 @@ final class DictationCoordinator {
                 if !hasInjectableTarget() {
                     switch settings.noFocusBehavior {
                     case .discard:
-                        AppLogger.input.info("No text field and discard mode - dropping dictation without touching clipboard")
+                        AppLogger.input.info(
+                            "No text field and discard mode - dropping dictation without touching clipboard")
                         overlay.hide()
                         return
                     case .clipboard:

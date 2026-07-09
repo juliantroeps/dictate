@@ -71,10 +71,14 @@ actor WhisperKitEngine: TranscriptionEngine {
     }
 
     private func cachedModelFolder() -> String? {
-        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            return nil
+        }
         let path = docs.appendingPathComponent("huggingface/models/argmaxinc/whisperkit-coreml/\(model)")
         var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path.path, isDirectory: &isDir), isDir.boolValue else { return nil }
+        guard FileManager.default.fileExists(atPath: path.path, isDirectory: &isDir), isDir.boolValue else {
+            return nil
+        }
         let contents = (try? FileManager.default.contentsOfDirectory(atPath: path.path)) ?? []
         guard contents.contains(where: { $0.hasSuffix(".mlmodelc") }) else { return nil }
         return path.path
@@ -98,22 +102,22 @@ actor WhisperKitEngine: TranscriptionEngine {
         options.temperatureFallbackCount = 1
 
         #if DEBUG
-        let start = Date()
+            let start = Date()
         #endif
         let results = try await wk.transcribe(audioArray: audioSamples, decodeOptions: options)
         #if DEBUG
-        let elapsed = Date().timeIntervalSince(start)
-        let audioSeconds = Double(audioSamples.count) / 16_000
-        AppLogger.transcription.debug(
-            String(format: "Transcribe wall=%.2fs audio=%.2fs", elapsed, audioSeconds))
+            let elapsed = Date().timeIntervalSince(start)
+            let audioSeconds = Double(audioSamples.count) / 16_000
+            AppLogger.transcription.debug(
+                String(format: "Transcribe wall=%.2fs audio=%.2fs", elapsed, audioSeconds))
         #endif
         let text = results.first?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         #if DEBUG
-        if text.isEmpty {
-            AppLogger.transcription.debug("Transcription result empty")
-        } else {
-            AppLogger.transcription.debug("Transcription result length=\(text.count)")
-        }
+            if text.isEmpty {
+                AppLogger.transcription.debug("Transcription result empty")
+            } else {
+                AppLogger.transcription.debug("Transcription result length=\(text.count)")
+            }
         #endif
         return text
     }

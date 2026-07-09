@@ -1,5 +1,5 @@
-import Testing
 import CoreGraphics
+import Testing
 
 @testable import dictate
 

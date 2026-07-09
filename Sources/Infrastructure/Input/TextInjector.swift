@@ -1,5 +1,5 @@
-@preconcurrency import ApplicationServices
 import AppKit
+@preconcurrency import ApplicationServices
 import Foundation
 
 /// Opaque wrapper around an `AXUIElement` so the routing logic in `TextInjector.route`

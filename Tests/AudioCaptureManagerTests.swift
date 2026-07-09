@@ -1,6 +1,6 @@
-import Testing
 import AVFoundation
 import Foundation
+import Testing
 
 @testable import dictate
 
@@ -119,18 +119,20 @@ struct AudioCaptureManagerTests {
     @Test
     func drainConverterTailReturnsTailAfterResampling() throws {
         // Build a 44100Hz -> 16000Hz converter (most common real-world case).
-        let inputFormat = try #require(AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: 44_100,
-            channels: 1,
-            interleaved: false
-        ))
-        let targetFormat = try #require(AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: 16_000,
-            channels: 1,
-            interleaved: false
-        ))
+        let inputFormat = try #require(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 44_100,
+                channels: 1,
+                interleaved: false
+            ))
+        let targetFormat = try #require(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 16_000,
+                channels: 1,
+                interleaved: false
+            ))
         let converter = try #require(AVAudioConverter(from: inputFormat, to: targetFormat))
 
         // Feed one buffer of 44100 frames (1 second at 44.1kHz) via a normal streaming pass.
@@ -145,14 +147,16 @@ struct AudioCaptureManagerTests {
         }
 
         // Streaming convert pass - mirrors processAudioBuffer.
-        let outputFrameCount = try #require(AudioCaptureManager.outputFrameCount(
-            sampleRate: inputFormat.sampleRate,
-            inputFrames: frameCount
-        ))
-        let outputBuffer = try #require(AVAudioPCMBuffer(
-            pcmFormat: targetFormat,
-            frameCapacity: outputFrameCount
-        ))
+        let outputFrameCount = try #require(
+            AudioCaptureManager.outputFrameCount(
+                sampleRate: inputFormat.sampleRate,
+                inputFrames: frameCount
+            ))
+        let outputBuffer = try #require(
+            AVAudioPCMBuffer(
+                pcmFormat: targetFormat,
+                frameCapacity: outputFrameCount
+            ))
         var inputConsumed = false
         converter.convert(to: outputBuffer, error: nil) { _, outStatus in
             if inputConsumed {
@@ -194,8 +198,9 @@ struct AudioCaptureManagerTests {
         let received = LockedFlag()
         manager.onEvent = { @Sendable _ in received.set() }
 
-        let format = try #require(AVAudioFormat(
-            commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false))
+        let format = try #require(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false))
         let frames: AVAudioFrameCount = 4800
         let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
         buffer.frameLength = frames
@@ -241,8 +246,9 @@ struct AudioCaptureManagerTests {
         // installed, but installRecordingTap already recorded which engine it tapped.
         _ = try? await Task { @MainActor in try await manager.startRecording() }.value
 
-        #expect(manager.lastTappedEngine === fresh,
-                "tap must be installed on the engine swapped in on main, not the torn-down one")
+        #expect(
+            manager.lastTappedEngine === fresh,
+            "tap must be installed on the engine swapped in on main, not the torn-down one")
     }
 
     @Test
@@ -251,8 +257,9 @@ struct AudioCaptureManagerTests {
         let before = manager.currentEngineForTesting
         manager.triggerConfigChangeForTesting()
         // No await: assignment must have already happened on main before returning.
-        #expect(manager.currentEngineForTesting !== before,
-                "replacement engine must be installed synchronously on main (no deferred hop)")
+        #expect(
+            manager.currentEngineForTesting !== before,
+            "replacement engine must be installed synchronously on main (no deferred hop)")
     }
 
     @Test
@@ -305,10 +312,12 @@ struct AudioCaptureManagerTests {
             manager.triggerConfigChangeForTesting()
         }
 
-        #expect(sawInputConfigChanged.value,
-                "settle completion must deliver .inputConfigurationChanged (no trap)")
-        #expect(deliveredOnMain.value,
-                ".inputConfigurationChanged must be delivered on the main thread")
+        #expect(
+            sawInputConfigChanged.value,
+            "settle completion must deliver .inputConfigurationChanged (no trap)")
+        #expect(
+            deliveredOnMain.value,
+            ".inputConfigurationChanged must be delivered on the main thread")
     }
 
     @Test
@@ -333,13 +342,14 @@ struct AudioCaptureManagerTests {
                     }
                 }
             }
-            manager.triggerConfigChangeForTesting()    // build #2; settle fires event when done
+            manager.triggerConfigChangeForTesting()  // build #2; settle fires event when done
         }
         let countAfterFirstSettle = recorder.buildCount
 
-        manager.triggerConfigChangeForTesting()        // must NOT be suppressed -> build #3
-        #expect(recorder.buildCount > countAfterFirstSettle,
-                "after a settle completes, a new config change must be handled (isSettling reset)")
+        manager.triggerConfigChangeForTesting()  // must NOT be suppressed -> build #3
+        #expect(
+            recorder.buildCount > countAfterFirstSettle,
+            "after a settle completes, a new config change must be handled (isSettling reset)")
     }
 
     @Test
@@ -353,18 +363,20 @@ struct AudioCaptureManagerTests {
     func drainConverterTailReturnsEmptyOrHarmlessWithNoInput() throws {
         // A converter that received no prior input should return [] or a trivially
         // small result - it must not inject spurious audio.
-        let inputFormat = try #require(AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: 16_000,
-            channels: 1,
-            interleaved: false
-        ))
-        let targetFormat = try #require(AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: 16_000,
-            channels: 1,
-            interleaved: false
-        ))
+        let inputFormat = try #require(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 16_000,
+                channels: 1,
+                interleaved: false
+            ))
+        let targetFormat = try #require(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 16_000,
+                channels: 1,
+                interleaved: false
+            ))
         let converter = try #require(AVAudioConverter(from: inputFormat, to: targetFormat))
 
         let tail = AudioCaptureManager.drainConverterTail(converter)
@@ -382,13 +394,15 @@ struct AudioCaptureManagerTests {
         let manager = AudioCaptureManager()
         let staleEpoch = manager.currentTapEpochForTesting
 
-        manager.triggerConfigChangeForTesting()   // swapEngine() bumps the epoch
+        manager.triggerConfigChangeForTesting()  // swapEngine() bumps the epoch
 
-        #expect(manager.currentTapEpochForTesting != staleEpoch,
-                "swapEngine must bump the epoch")
+        #expect(
+            manager.currentTapEpochForTesting != staleEpoch,
+            "swapEngine must bump the epoch")
 
-        let format = try #require(AVAudioFormat(
-            commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false))
+        let format = try #require(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false))
         let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 16))
         buffer.frameLength = 16
 
@@ -411,7 +425,7 @@ struct AudioCaptureManagerTests {
         // interrupt the recording so the caller can flush/re-arm instead of holding a
         // silent mic.
         let manager = AudioCaptureManager()
-        manager.settleDelay = 5.0 // long enough that the settle timer will not fire mid-test
+        manager.settleDelay = 5.0  // long enough that the settle timer will not fire mid-test
         manager.validateDelay = 0.02
 
         let interrupted = LockedBox<[Float]>()
@@ -421,15 +435,16 @@ struct AudioCaptureManagerTests {
             }
         }
 
-        manager.triggerConfigChangeForTesting()   // first config change -> isSettling = true
+        manager.triggerConfigChangeForTesting()  // first config change -> isSettling = true
         #expect(manager.isSettlingForTesting)
 
-        manager.setRecordingForTesting(true)      // simulate a hold that started mid-settle
+        manager.setRecordingForTesting(true)  // simulate a hold that started mid-settle
 
-        manager.triggerConfigChangeForTesting()   // second config change while settling+recording
+        manager.triggerConfigChangeForTesting()  // second config change while settling+recording
 
-        #expect(interrupted.value != nil,
-                ".recordingInterrupted must fire for a mid-settle recording interrupt")
+        #expect(
+            interrupted.value != nil,
+            ".recordingInterrupted must fire for a mid-settle recording interrupt")
         // isRecording must be cleared so a stray stopRecording() no-ops (mic not left hot).
         #expect(manager.stopRecording() == [])
         // Still settling (in-flight timer not fired) - not a second full settle cycle.
@@ -455,15 +470,18 @@ struct AudioCaptureManagerTests {
 
         manager.setStartingForTesting(true)
         manager.triggerEngineConfigChangeNotificationForTesting()
-        #expect(recorder.buildCount == buildCountBefore,
-                "no engine swap must happen while a start is in flight")
-        #expect(manager.currentEngineForTesting === engineBefore,
-                "engine identity must be stable while isStarting is held")
+        #expect(
+            recorder.buildCount == buildCountBefore,
+            "no engine swap must happen while a start is in flight")
+        #expect(
+            manager.currentEngineForTesting === engineBefore,
+            "engine identity must be stable while isStarting is held")
 
         manager.setStartingForTesting(false)
         manager.triggerEngineConfigChangeNotificationForTesting()
-        #expect(recorder.buildCount > buildCountBefore,
-                "once isStarting clears, a config change must be handled normally again")
+        #expect(
+            recorder.buildCount > buildCountBefore,
+            "once isStarting clears, a config change must be handled normally again")
     }
 
     @Test
@@ -497,7 +515,7 @@ struct AudioCaptureManagerTests {
         manager.triggerConfigChangeForTesting()
         let buildCountAfterFirst = recorder.buildCount
 
-        manager.triggerConfigChangeForTesting()   // settling, not recording -> dropped
+        manager.triggerConfigChangeForTesting()  // settling, not recording -> dropped
 
         #expect(!interrupted.value, "no recording was active - no interrupt should fire")
         #expect(recorder.buildCount == buildCountAfterFirst, "no second swap while settling")

@@ -63,19 +63,19 @@ final class AudioCaptureManager {
         epochLock.withLock { _tapEpoch == epoch }
     }
 
-#if DEBUG
-    // Test-only timing seam: lets tests shrink the settle/validate windows so the
-    // full config-change lifecycle can be exercised without a ~1.8s real-time sleep.
-    var settleDelay: TimeInterval = 1.5
-    var validateDelay: TimeInterval = 0.2
-#else
-    private let settleDelay: TimeInterval = 1.5
-    private let validateDelay: TimeInterval = 0.2
-#endif
+    #if DEBUG
+        // Test-only timing seam: lets tests shrink the settle/validate windows so the
+        // full config-change lifecycle can be exercised without a ~1.8s real-time sleep.
+        var settleDelay: TimeInterval = 1.5
+        var validateDelay: TimeInterval = 0.2
+    #else
+        private let settleDelay: TimeInterval = 1.5
+        private let validateDelay: TimeInterval = 0.2
+    #endif
 
     init(makeEngine: @escaping @Sendable () -> AVAudioEngine = { AVAudioEngine() }) {
         self.makeEngine = makeEngine
-        self.engine = makeEngine()   // initial build on init is fine (no device churn yet)
+        self.engine = makeEngine()  // initial build on init is fine (no device churn yet)
         setupEngineObserver()
         installDefaultInputListener()
     }
@@ -287,9 +287,9 @@ final class AudioCaptureManager {
             guard let self, self.isCurrentEpoch(epoch) else { return }
             self.processAudioBuffer(pcmBuffer)
         }
-#if DEBUG
-        lastTappedEngine = engine
-#endif
+        #if DEBUG
+            lastTappedEngine = engine
+        #endif
     }
 
     func stopRecording() -> [Float] {
@@ -325,7 +325,7 @@ final class AudioCaptureManager {
     // Internal so tests can exercise the guard without audio hardware.
     // nonisolated so processAudioBuffer (tap thread) can call it directly.
     nonisolated static func outputFrameCount(sampleRate: Double, inputFrames: AVAudioFrameCount) -> AVAudioFrameCount? {
-        guard sampleRate > 0 else { return nil }   // 0 Hz during device transitions -> inf ratio -> UInt32 trap
+        guard sampleRate > 0 else { return nil }  // 0 Hz during device transitions -> inf ratio -> UInt32 trap
         return AVAudioFrameCount(Double(inputFrames) * (16_000.0 / sampleRate))
     }
 
@@ -335,10 +335,12 @@ final class AudioCaptureManager {
     // nonisolated so stopRecording and handleConfigChange can call it from lock closures.
     nonisolated static func drainConverterTail(_ converter: AVAudioConverter) -> [Float] {
         // Tail is bounded (filter delay); a few hundred frames at 16kHz is ample.
-        guard let outputBuffer = AVAudioPCMBuffer(
-            pcmFormat: converter.outputFormat,
-            frameCapacity: 4096
-        ) else { return [] }
+        guard
+            let outputBuffer = AVAudioPCMBuffer(
+                pcmFormat: converter.outputFormat,
+                frameCapacity: 4096
+            )
+        else { return [] }
 
         var error: NSError?
         converter.convert(to: outputBuffer, error: &error) { _, outStatus in
@@ -356,10 +358,12 @@ final class AudioCaptureManager {
     // Runs on the audio tap thread - must be nonisolated.
     // All state access is via bufferLock/converterLock or nonisolated(unsafe) targetFormat.
     nonisolated func processAudioBuffer(_ inputBuffer: AVAudioPCMBuffer) {
-        guard let outputFrameCount = AudioCaptureManager.outputFrameCount(
-            sampleRate: inputBuffer.format.sampleRate,
-            inputFrames: inputBuffer.frameLength
-        ) else { return }
+        guard
+            let outputFrameCount = AudioCaptureManager.outputFrameCount(
+                sampleRate: inputBuffer.format.sampleRate,
+                inputFrames: inputBuffer.frameLength
+            )
+        else { return }
 
         let converter: AVAudioConverter? = converterLock.withLock {
             if self.converter == nil || self.converter!.inputFormat != inputBuffer.format {
@@ -369,10 +373,12 @@ final class AudioCaptureManager {
         }
         guard let converter else { return }
 
-        guard let outputBuffer = AVAudioPCMBuffer(
-            pcmFormat: converter.outputFormat,
-            frameCapacity: outputFrameCount
-        ) else { return }
+        guard
+            let outputBuffer = AVAudioPCMBuffer(
+                pcmFormat: converter.outputFormat,
+                frameCapacity: outputFrameCount
+            )
+        else { return }
 
         var error: NSError?
         var inputConsumed = false
@@ -399,10 +405,11 @@ final class AudioCaptureManager {
         }
 
         guard let floatData = outputBuffer.floatChannelData?[0] else { return }
-        let samples = Array(UnsafeBufferPointer(
-            start: floatData,
-            count: Int(outputBuffer.frameLength)
-        ))
+        let samples = Array(
+            UnsafeBufferPointer(
+                start: floatData,
+                count: Int(outputBuffer.frameLength)
+            ))
 
         var sumOfSquares: Float = 0
         for sample in samples { sumOfSquares += sample * sample }
@@ -504,59 +511,59 @@ final class AudioCaptureManager {
             let format1 = engineBox.value.inputNode.outputFormat(forBus: 0)
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + validateDelay) {
                 let format2 = engineBox.value.inputNode.outputFormat(forBus: 0)
-                let stable = format1.sampleRate == format2.sampleRate &&
-                             format1.channelCount == format2.channelCount &&
-                             format1.sampleRate > 0
+                let stable =
+                    format1.sampleRate == format2.sampleRate && format1.channelCount == format2.channelCount
+                    && format1.sampleRate > 0
                 DispatchQueue.main.async { completion(stable) }
             }
         }
     }
 
-#if DEBUG
-    /// Test-only entry point: drives the config-change teardown/swap path so the
-    /// off-main construction guarantee can be asserted without audio hardware.
-    func triggerConfigChangeForTesting() { handleConfigChange() }
+    #if DEBUG
+        /// Test-only entry point: drives the config-change teardown/swap path so the
+        /// off-main construction guarantee can be asserted without audio hardware.
+        func triggerConfigChangeForTesting() { handleConfigChange() }
 
-    /// Identity of the engine the most recent tap was installed on (test-only).
-    weak var lastTappedEngine: AVAudioEngine?
+        /// Identity of the engine the most recent tap was installed on (test-only).
+        weak var lastTappedEngine: AVAudioEngine?
 
-    /// Identity of the currently installed engine (test-only).
-    var currentEngineForTesting: AVAudioEngine { engine }
+        /// Identity of the currently installed engine (test-only).
+        var currentEngineForTesting: AVAudioEngine { engine }
 
-    /// Current tap epoch (test-only). See _tapEpoch.
-    var currentTapEpochForTesting: UInt64 { currentEpoch }
+        /// Current tap epoch (test-only). See _tapEpoch.
+        var currentTapEpochForTesting: UInt64 { currentEpoch }
 
-    /// Runs the same isCurrentEpoch guard the real tap closure uses, then
-    /// processAudioBuffer, returning whether the callback was accepted
-    /// (test-only - lets the epoch guard be exercised without audio hardware).
-    func processTapCallbackForTesting(epoch: UInt64, _ buffer: AVAudioPCMBuffer) -> Bool {
-        guard isCurrentEpoch(epoch) else { return false }
-        processAudioBuffer(buffer)
-        return true
-    }
+        /// Runs the same isCurrentEpoch guard the real tap closure uses, then
+        /// processAudioBuffer, returning whether the callback was accepted
+        /// (test-only - lets the epoch guard be exercised without audio hardware).
+        func processTapCallbackForTesting(epoch: UInt64, _ buffer: AVAudioPCMBuffer) -> Bool {
+            guard isCurrentEpoch(epoch) else { return false }
+            processAudioBuffer(buffer)
+            return true
+        }
 
-    /// Forces isRecording (test-only - simulates a hold that started mid-settle).
-    func setRecordingForTesting(_ value: Bool) { isRecording = value }
+        /// Forces isRecording (test-only - simulates a hold that started mid-settle).
+        func setRecordingForTesting(_ value: Bool) { isRecording = value }
 
-    /// Whether a config-change settle window is in flight (test-only).
-    var isSettlingForTesting: Bool { isSettling }
+        /// Whether a config-change settle window is in flight (test-only).
+        var isSettlingForTesting: Bool { isSettling }
 
-    /// Forces isStarting (test-only - simulates a startRecording() attempt in flight,
-    /// without needing to race the real off-main engine.start() call).
-    func setStartingForTesting(_ value: Bool) { isStarting = value }
+        /// Forces isStarting (test-only - simulates a startRecording() attempt in flight,
+        /// without needing to race the real off-main engine.start() call).
+        func setStartingForTesting(_ value: Bool) { isStarting = value }
 
-    /// Whether a startRecording() attempt is currently in flight (test-only).
-    var isStartingForTesting: Bool { isStarting }
+        /// Whether a startRecording() attempt is currently in flight (test-only).
+        var isStartingForTesting: Bool { isStarting }
 
-    /// Mirrors the AVAudioEngineConfigurationChange observer's guard chain (including
-    /// the isStarting check) so the start-vs-swap race guard can be asserted without
-    /// posting a real NotificationCenter notification (test-only).
-    func triggerEngineConfigChangeNotificationForTesting() {
-        guard !isStarting else { return }
-        guard !isSettling || isRecording else { return }
-        handleConfigChange()
-    }
-#endif
+        /// Mirrors the AVAudioEngineConfigurationChange observer's guard chain (including
+        /// the isStarting check) so the start-vs-swap race guard can be asserted without
+        /// posting a real NotificationCenter notification (test-only).
+        func triggerEngineConfigChangeNotificationForTesting() {
+            guard !isStarting else { return }
+            guard !isSettling || isRecording else { return }
+            handleConfigChange()
+        }
+    #endif
 }
 
 enum AudioCaptureError: Error {
