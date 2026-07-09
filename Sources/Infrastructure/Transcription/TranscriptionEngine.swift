@@ -36,7 +36,10 @@ actor WhisperKitEngine: TranscriptionEngine {
     func prepare() async throws {
         guard whisperKit == nil else { return }
         AppLogger.transcription.info("Loading WhisperKit model: \(self.model)")
-        let config = WhisperKitConfig(model: self.model, load: true)
+        // prewarm: true moves CoreML/ANE specialization into this background
+        // load (already covered by the loading pill) instead of the first
+        // transcribe call.
+        let config = WhisperKitConfig(model: self.model, prewarm: true, load: true)
         if let cached = cachedModelFolder() {
             AppLogger.transcription.debug("Using cached WhisperKit model folder")
             config.modelFolder = cached
@@ -87,8 +90,23 @@ actor WhisperKitEngine: TranscriptionEngine {
             options.promptTokens = tokens
             options.usePrefillPrompt = true
         }
+        // Interactive-dictation latency/quality tradeoffs: timestamps are
+        // decoded but never used by dictation, and the default fallback of
+        // 5 full-window re-decodes on low confidence causes occasional
+        // 3-5x slow dictations. Keep these conservative, not zero.
+        options.withoutTimestamps = true
+        options.temperatureFallbackCount = 1
 
+        #if DEBUG
+        let start = Date()
+        #endif
         let results = try await wk.transcribe(audioArray: audioSamples, decodeOptions: options)
+        #if DEBUG
+        let elapsed = Date().timeIntervalSince(start)
+        let audioSeconds = Double(audioSamples.count) / 16_000
+        AppLogger.transcription.debug(
+            String(format: "Transcribe wall=%.2fs audio=%.2fs", elapsed, audioSeconds))
+        #endif
         let text = results.first?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         #if DEBUG
         if text.isEmpty {

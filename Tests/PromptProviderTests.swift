@@ -27,4 +27,10 @@ struct PromptProviderTests {
 
         #expect(PromptProvider.resolve(from: promptURL) == PromptProvider.defaultPrompt)
     }
+
+    @Test func defaultPromptFixedAndTrimmed() {
+        #expect(!PromptProvider.defaultPrompt.contains("MonogDB"))
+        #expect(PromptProvider.defaultPrompt.contains("MongoDB"))
+        #expect(PromptProvider.defaultPrompt.count < 300)
+    }
 }
