@@ -1,5 +1,5 @@
 import Foundation
-import WhisperKit
+@preconcurrency import WhisperKit
 
 // MARK: - Protocol
 
@@ -8,18 +8,26 @@ protocol TranscriptionEngine: Sendable {
     var isReady: Bool { get }
     func prepare() async throws
     func transcribe(audioSamples: [Float]) async throws -> String
-    func unload()
+    func unload() async
 }
 
 // MARK: - WhisperKitEngine
 
-final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
+/// Actor-isolated so `prepare`/`transcribe`/`unload` can never race a model
+/// swap - `whisperKit`/`promptTokens` are only ever touched on the actor's
+/// own executor, whichever thread that happens to be.
+actor WhisperKitEngine: TranscriptionEngine {
     let name = "WhisperKit"
     private var whisperKit: WhisperKit?
     private var promptTokens: [Int]?
     private let model: String
 
-    var isReady: Bool { whisperKit != nil }
+    // isReady must be readable synchronously (EngineCoordinator.isReady is a
+    // plain, non-async property), so it's tracked outside actor isolation
+    // under a lock rather than derived from `whisperKit != nil`.
+    private let readyLock = NSLock()
+    nonisolated(unsafe) private var _isReady = false
+    nonisolated var isReady: Bool { readyLock.withLock { _isReady } }
 
     init(model: String = "openai_whisper-tiny.en") {
         self.model = model
@@ -50,11 +58,13 @@ final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
         }
 
         AppLogger.transcription.info("WhisperKit ready")
+        readyLock.withLock { _isReady = true }
     }
 
-    func unload() {
+    func unload() async {
         whisperKit = nil
         promptTokens = nil
+        readyLock.withLock { _isReady = false }
     }
 
     private func cachedModelFolder() -> String? {

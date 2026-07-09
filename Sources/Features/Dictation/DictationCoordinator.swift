@@ -267,17 +267,8 @@ final class DictationCoordinator {
             }
 
             do {
-                let text = try await withThrowingTaskGroup(of: String.self) { group in
-                    group.addTask {
-                        try await engineCoordinator.transcribe(audioSamples: samples)
-                    }
-                    group.addTask {
-                        try await Task.sleep(for: transcriptionTimeout)
-                        throw TranscriptionError.timeout
-                    }
-                    let result = try await group.next()!
-                    group.cancelAll()
-                    return result
+                let text = try await raceAgainstTimeout(transcriptionTimeout) {
+                    try await engineCoordinator.transcribe(audioSamples: samples)
                 }
 
                 // Stale-session guard: a newer session has taken over.
@@ -313,6 +304,10 @@ final class DictationCoordinator {
                 AppLogger.transcription.warning("\(logLabel) timed out")
                 guard runtimeState.transcriptionGeneration == generation else { return }
                 overlay.showError("Transcription timed out", duration: 2.0)
+                // Recover onto a fresh engine instance so the wedged one doesn't
+                // eat a second concurrent transcribe (and another timeout) on the
+                // next key-up. The wedged instance itself is never awaited here.
+                engineCoordinator.recover()
             } catch {
                 AppLogger.transcription.error("\(logLabel) failed: \(error)")
                 guard runtimeState.transcriptionGeneration == generation else { return }
@@ -364,4 +359,69 @@ final class DictationCoordinator {
         }
     }
 
+}
+
+// MARK: - Timeout race
+
+/// Races an unstructured transcription task against a timeout.
+///
+/// `withThrowingTaskGroup` cannot be used here: exiting its closure implicitly
+/// awaits every child task, including the loser. A wedged CoreML call that
+/// never checks cancellation would then block this function forever - exactly
+/// the case the timeout exists for. Instead, `operation` runs as a detached-
+/// from-structure `Task` that is left orphaned on timeout; its late result (if
+/// any) is discarded by the caller's transcriptionGeneration guard.
+private func raceAgainstTimeout(
+    _ timeout: Duration,
+    operation: @escaping @Sendable () async throws -> String
+) async throws -> String {
+    let operationTask = Task { try await operation() }
+
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+            let resumeOnce = SingleResumeContinuation(continuation)
+
+            let timeoutTask = Task {
+                try? await Task.sleep(for: timeout)
+                resumeOnce.resume(.failure(TranscriptionError.timeout))
+            }
+
+            Task {
+                do {
+                    let text = try await operationTask.value
+                    timeoutTask.cancel()
+                    resumeOnce.resume(.success(text))
+                } catch {
+                    timeoutTask.cancel()
+                    resumeOnce.resume(.failure(error))
+                }
+            }
+        }
+    } onCancel: {
+        // Translate outer-task cancellation (e.g. handleRecordingInterrupted)
+        // into a CancellationError resume via the operation's own cancellation
+        // handling, rather than resuming the continuation directly here.
+        operationTask.cancel()
+    }
+}
+
+/// Guards a `CheckedContinuation` that can be raced to completion from
+/// multiple tasks (operation success/failure, timeout, cancellation).
+/// Resuming a continuation more than once is a runtime crash, so every
+/// caller after the first must be a no-op.
+private final class SingleResumeContinuation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<String, Error>?
+
+    init(_ continuation: CheckedContinuation<String, Error>) {
+        self.continuation = continuation
+    }
+
+    func resume(_ result: Result<String, Error>) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(with: result)
+    }
 }

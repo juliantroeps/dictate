@@ -319,6 +319,51 @@ struct DictationCoordinatorTests {
         #expect(engine.transcribeInputs.count == 1)
     }
 
+    @Test(.timeLimit(.minutes(1))) @MainActor
+    func wedgedTranscribeSurfacesTimeoutAndRecovers() async {
+        // Regression for the CoreML-wedge case the timeout exists for: a
+        // transcribe call that never returns and never checks cancellation
+        // must not block the timeout from surfacing. If the race mechanism
+        // regresses to something that awaits the wedged call, this test hangs
+        // instead of failing fast - hence the explicit time limit.
+        let settings = FakeDictationSettings()
+        settings.minHoldDuration = 0.1
+        settings.muteSystemAudio = false
+
+        var currentTime: UInt64 = 1_000_000_000
+        let audioCapture = FakeAudioCaptureManager()
+        let overlay = FakeOverlayController()
+        let engine = FakeTranscriptionEngineCoordinator()
+        engine.isReady = true
+        engine.transcribeBehavior = { _ in
+            try await withCheckedThrowingContinuation { (_: CheckedContinuation<String, Error>) in
+                // Intentionally never resumed - simulates a wedged CoreML call.
+            }
+        }
+
+        let coordinator = DictationCoordinator(
+            audioCapture: audioCapture,
+            overlay: overlay,
+            engineCoordinator: engine,
+            settings: settings,
+            now: { DispatchTime(uptimeNanoseconds: currentTime) },
+            transcriptionTimeout: .milliseconds(20),
+            injectText: { _ in .pasted },
+        )
+
+        coordinator.handleKeyDown()
+        currentTime += 500_000_000
+        coordinator.handleKeyUp()
+
+        let task = coordinator.runtimeState.transcriptionTask
+        #expect(task != nil)
+        await task?.value
+
+        #expect(overlay.state.phase == .error("Transcription timed out"))
+        #expect(engine.transcribeInputs.count == 1)
+        #expect(engine.recoverCalls == 1)
+    }
+
     @Test @MainActor
     func interruptionCleanupCancelsTranscriptionAndUnmutesAudio() async {
         let settings = FakeDictationSettings()

@@ -97,6 +97,7 @@ final class FakeTranscriptionEngineCoordinator: TranscriptionEngineCoordinating 
     private(set) var prepareAttempts: [Int] = []
     private(set) var reloadModels: [String] = []
     private(set) var transcribeInputs: [[Float]] = []
+    private(set) var recoverCalls = 0
     var transcribeBehavior: (([Float]) async throws -> String)?
 
     func prepare(attempts: Int) {
@@ -105,6 +106,10 @@ final class FakeTranscriptionEngineCoordinator: TranscriptionEngineCoordinating 
 
     func reload(using model: String) {
         reloadModels.append(model)
+    }
+
+    func recover() {
+        recoverCalls += 1
     }
 
     func transcribe(audioSamples: [Float]) async throws -> String {
