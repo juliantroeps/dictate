@@ -441,6 +441,8 @@ struct DictationCoordinatorTests {
         coordinator.handleKeyDown()
         // applyMuteIfNeeded's HAL now runs off-main; wait for it before key-up.
         await coordinator.runtimeState.muteTask?.value
+        // The muted device's UID should be persisted while the mute is live.
+        #expect(settings.activeMuteDeviceUID == "device-1-uid")
         currentTime += 500_000_000
         coordinator.handleKeyUp()
 
@@ -448,6 +450,8 @@ struct DictationCoordinatorTests {
         #expect(fakeMute.calls.count == 2)
         #expect(fakeMute.calls[0] == (muted: true, device: 1))
         #expect(fakeMute.calls[1] == (muted: false, device: 1))
+        // The persisted UID must be cleared once the mute is restored.
+        #expect(settings.activeMuteDeviceUID == nil)
     }
 
     @Test @MainActor
@@ -1298,5 +1302,133 @@ struct DictationCoordinatorTests {
         // No mute calls and no activeMute stored
         #expect(fakeMute.calls.isEmpty)
         #expect(coordinator.runtimeState.activeMute == nil)
+    }
+
+    // MARK: - Start-failure surfacing
+
+    @Test @MainActor
+    func startFailureShowsErrorAndSkipsTranscription() async {
+        struct FakeError: Error {}
+        let settings = FakeDictationSettings()
+        settings.minHoldDuration = 0.1
+        settings.muteSystemAudio = false
+
+        var currentTime: UInt64 = 1_000_000_000
+        let audioCapture = FakeAudioCaptureManager()
+        audioCapture.startRecordingError = FakeError()
+        let overlay = FakeOverlayController()
+        let engine = FakeTranscriptionEngineCoordinator()
+        var injectedTexts: [String] = []
+
+        let coordinator = DictationCoordinator(
+            audioCapture: audioCapture,
+            overlay: overlay,
+            engineCoordinator: engine,
+            settings: settings,
+            now: { DispatchTime(uptimeNanoseconds: currentTime) },
+            injectText: { text in
+                injectedTexts.append(text)
+                return .injected
+            }
+        )
+
+        coordinator.handleKeyDown()
+        let startTask = coordinator.runtimeState.recordingStartTask
+        await startTask?.value
+
+        #expect(overlay.shownErrors.contains("Microphone unavailable"))
+        #expect(coordinator.runtimeState.keyDownTime == nil)
+
+        currentTime += 500_000_000
+        coordinator.handleKeyUp()
+
+        #expect(engine.transcribeInputs.isEmpty)
+        #expect(injectedTexts.isEmpty)
+        #expect(overlay.state.phase == .error("Microphone unavailable"))
+    }
+
+    // MARK: - Mute recovery on launch
+
+    @Test @MainActor
+    func recoverPersistedMuteOnLaunchUnmutesPersistedDevice() {
+        let settings = FakeDictationSettings()
+        let audioCapture = FakeAudioCaptureManager()
+        let overlay = FakeOverlayController()
+        let engine = FakeTranscriptionEngineCoordinator()
+        let fakeMute = FakeMuteController()
+        fakeMute.currentDevice = 2
+        fakeMute.settable = [1, 2]
+        fakeMute.uidsByDevice = [1: "device-1-uid", 2: "device-2-uid"]
+        fakeMute.mutedState[1] = true  // left muted by a prior crash mid-hold
+        settings.activeMuteDeviceUID = "device-1-uid"
+
+        let coordinator = DictationCoordinator(
+            audioCapture: audioCapture,
+            overlay: overlay,
+            engineCoordinator: engine,
+            settings: settings,
+            injectText: { _ in .pasted },
+            muteController: fakeMute.makeController()
+        )
+
+        coordinator.recoverPersistedMuteOnLaunch()
+
+        // Unmutes the persisted device (1), not the current default (2).
+        #expect(fakeMute.calls.count == 1)
+        #expect(fakeMute.calls[0] == (muted: false, device: 1))
+        #expect(settings.activeMuteDeviceUID == nil)
+    }
+
+    @Test @MainActor
+    func recoverPersistedMuteOnLaunchFallsBackToCurrentDeviceWhenUIDUnresolved() {
+        let settings = FakeDictationSettings()
+        let audioCapture = FakeAudioCaptureManager()
+        let overlay = FakeOverlayController()
+        let engine = FakeTranscriptionEngineCoordinator()
+        let fakeMute = FakeMuteController()
+        fakeMute.currentDevice = 2
+        fakeMute.uidsByDevice = [2: "device-2-uid"]
+        // The persisted device is no longer present - simulates it having disconnected.
+        settings.activeMuteDeviceUID = "stale-uid-from-disconnected-device"
+
+        let coordinator = DictationCoordinator(
+            audioCapture: audioCapture,
+            overlay: overlay,
+            engineCoordinator: engine,
+            settings: settings,
+            injectText: { _ in .pasted },
+            muteController: fakeMute.makeController()
+        )
+
+        coordinator.recoverPersistedMuteOnLaunch()
+
+        #expect(fakeMute.calls.count == 1)
+        #expect(fakeMute.calls[0] == (muted: false, device: 2))
+        #expect(settings.activeMuteDeviceUID == nil)
+    }
+
+    @Test @MainActor
+    func recoverPersistedMuteOnLaunchNoOpsWhenNothingToRecover() {
+        let settings = FakeDictationSettings()
+        let audioCapture = FakeAudioCaptureManager()
+        let overlay = FakeOverlayController()
+        let engine = FakeTranscriptionEngineCoordinator()
+        let fakeMute = FakeMuteController()
+
+        let coordinator = DictationCoordinator(
+            audioCapture: audioCapture,
+            overlay: overlay,
+            engineCoordinator: engine,
+            settings: settings,
+            injectText: { _ in .pasted },
+            muteController: fakeMute.makeController()
+        )
+
+        coordinator.recoverPersistedMuteOnLaunch()
+
+        // No persisted UID: falls back to unmuting the current default device.
+        #expect(fakeMute.calls.count == 1)
+        #expect(fakeMute.calls[0] == (muted: false, device: 1))
+        #expect(settings.activeMuteDeviceUID == nil)
     }
 }

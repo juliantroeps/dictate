@@ -31,6 +31,20 @@ final class Settings {
         }
     }
 
+    /// UID of the output device we are actively holding muted (persists while a
+    /// dictation-triggered mute is live, cleared on restore). Survives across
+    /// relaunch so a crash mid-hold can be recovered even if the device's
+    /// AudioDeviceID changed or the device disappeared.
+    var activeMuteDeviceUID: String? {
+        didSet {
+            if let uid = activeMuteDeviceUID {
+                UserDefaults.standard.set(uid, forKey: "activeMuteDeviceUID")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "activeMuteDeviceUID")
+            }
+        }
+    }
+
     var launchAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }
         set {
@@ -59,6 +73,7 @@ final class Settings {
         self.noFocusBehavior = NoFocusBehavior(rawValue: defaults.string(forKey: "noFocusBehavior") ?? "") ?? .clipboard
         self.muteSystemAudio = defaults.bool(forKey: "muteSystemAudio")
         self.selectedInputDeviceUID = defaults.string(forKey: "selectedInputDeviceUID")
+        self.activeMuteDeviceUID = defaults.string(forKey: "activeMuteDeviceUID")
     }
 }
 

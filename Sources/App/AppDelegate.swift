@@ -25,10 +25,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Defensive unmute on launch: recovers from a previous crash/force-quit that left
-        // the output muted mid-recording. Acceptable tradeoff - if the user deliberately
-        // muted before launching, this will unmute. SIGKILL cannot be caught; launch is
-        // the only recovery path for that scenario.
-        SystemAudioController.setMuted(false)
+        // the output muted mid-recording. Unmutes the persisted device UID so this
+        // survives that device having disappeared since; falls back to the current
+        // default output. Acceptable tradeoff - if the user deliberately muted before
+        // launching, this will unmute. SIGKILL cannot be caught; launch is the only
+        // recovery path for that scenario.
+        dictationCoordinator.recoverPersistedMuteOnLaunch()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
@@ -44,7 +46,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AccessibilityPermission.requestIfNeeded()
         MicrophonePermission.requestInBackground()
 
-        _ = dictationCoordinator // force lazy init so engine callbacks are wired before load
         engineCoordinator.prepare()
         audioDeviceCoordinator.applyStartupSelectionIfNeeded()
         audioDeviceCoordinator.handleInputConfigurationChanged()

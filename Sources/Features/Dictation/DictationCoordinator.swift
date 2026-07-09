@@ -25,6 +25,7 @@ protocol DictationSettingsProviding: AnyObject {
     var minHoldDuration: Double { get }
     var muteSystemAudio: Bool { get }
     var noFocusBehavior: NoFocusBehavior { get }
+    var activeMuteDeviceUID: String? { get set }
 }
 
 extension AudioCaptureManager: AudioCapturing {}
@@ -41,13 +42,20 @@ struct MuteController: Sendable {
     var isMuted: @Sendable (AudioDeviceID) -> Bool
     var isSettable: @Sendable (AudioDeviceID) -> Bool
     var setMuted: @Sendable (Bool, AudioDeviceID) -> Void
+    /// Resolve a device's stable UID, persisted so a mute can be restored even if
+    /// the device's AudioDeviceID changes (BT reconnect) or disappears entirely.
+    var deviceUID: @Sendable (AudioDeviceID) -> String?
+    /// Resolve a persisted UID back to a current AudioDeviceID (nil if not present).
+    var deviceID: @Sendable (String) -> AudioDeviceID?
 
     /// Default implementation wired to SystemAudioController.
     static let system = MuteController(
         currentDeviceID: { SystemAudioController.currentDefaultOutputDeviceID },
         isMuted: { SystemAudioController.isMuted(on: $0) },
         isSettable: { SystemAudioController.isMutePropertySettable(on: $0) },
-        setMuted: { SystemAudioController.setMuted($0, on: $1) }
+        setMuted: { SystemAudioController.setMuted($0, on: $1) },
+        deviceUID: { SystemAudioController.deviceUID(for: $0) },
+        deviceID: { SystemAudioController.audioDeviceID(forUID: $0) }
     )
 }
 
@@ -104,6 +112,24 @@ final class DictationCoordinator {
         guard let m = runtimeState.activeMute else { return }
         muteController.setMuted(m.priorMuted, m.deviceID)
         runtimeState.activeMute = nil
+        settings.activeMuteDeviceUID = nil
+    }
+
+    /// Recover a mute left over from a previous crash/force-quit that killed the
+    /// process mid-hold. Resolves the persisted device UID so this survives that
+    /// device having disappeared (or a different default output at this launch);
+    /// falls back to unmuting the current default output device. Always clears the
+    /// persisted record so a stale/unresolvable UID cannot wedge future launches.
+    /// SIGKILL cannot be caught; launch is the only recovery path for that scenario.
+    func recoverPersistedMuteOnLaunch() {
+        defer { settings.activeMuteDeviceUID = nil }
+        if let uid = settings.activeMuteDeviceUID, let deviceID = muteController.deviceID(uid) {
+            muteController.setMuted(false, deviceID)
+            return
+        }
+        if let deviceID = muteController.currentDeviceID() {
+            muteController.setMuted(false, deviceID)
+        }
     }
 
     /// Apply system-output mute for the current default device if the user enabled
@@ -129,6 +155,9 @@ final class DictationCoordinator {
                 // Only record activeMute if we actually muted - don't clobber a
                 // deliberate user mute (priorMuted == true means we left it alone).
                 self.runtimeState.activeMute = ActiveMute(deviceID: result.deviceID, priorMuted: result.priorMuted)
+                // Persist the UID (not the ID) so a crash mid-hold can be recovered
+                // from at next launch even if this device disappears or its ID changes.
+                self.settings.activeMuteDeviceUID = result.deviceUID
             }
         }
     }
@@ -139,6 +168,7 @@ final class DictationCoordinator {
     private struct MuteApplyResult: Sendable {
         let deviceID: AudioDeviceID
         let priorMuted: Bool
+        let deviceUID: String?
     }
 
     /// Runs currentDeviceID/isSettable/isMuted/setMuted off the main actor.
@@ -160,7 +190,9 @@ final class DictationCoordinator {
                     // Only mute if the user hasn't already muted - don't clobber deliberate mutes.
                     muteController.setMuted(true, deviceID)
                 }
-                continuation.resume(returning: MuteApplyResult(deviceID: deviceID, priorMuted: priorMuted))
+                let deviceUID = muteController.deviceUID(deviceID)
+                continuation.resume(
+                    returning: MuteApplyResult(deviceID: deviceID, priorMuted: priorMuted, deviceUID: deviceUID))
             }
         }
     }
@@ -211,7 +243,12 @@ final class DictationCoordinator {
                 return
             } catch {
                 AppLogger.audio.error("Failed to start recording: \(error)")
-                self.overlay.hide()
+                // Clear keyDownTime so a following key-up sees no active session
+                // and does not try to transcribe silence from a mic that never
+                // started - the error overlay below is the only feedback the
+                // user gets instead of the pill silently fading mid-hold.
+                self.runtimeState.keyDownTime = nil
+                self.overlay.showError("Microphone unavailable", duration: 2.0)
             }
         }
     }
@@ -405,7 +442,8 @@ final class DictationCoordinator {
                 return
             } catch {
                 AppLogger.audio.error("Failed to restart recording after device change: \(error)")
-                self.overlay.hide()
+                self.runtimeState.keyDownTime = nil
+                self.overlay.showError("Microphone unavailable", duration: 2.0)
             }
         }
     }

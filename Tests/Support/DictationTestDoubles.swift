@@ -8,6 +8,7 @@ final class FakeDictationSettings: DictationSettingsProviding {
     var minHoldDuration: Double = 0.4
     var muteSystemAudio: Bool = false
     var noFocusBehavior: NoFocusBehavior = .clipboard
+    var activeMuteDeviceUID: String?
 }
 
 @MainActor
@@ -145,6 +146,7 @@ final class FakeMuteController: @unchecked Sendable {
     private var _mutedState: [AudioDeviceID: Bool] = [:]
     private var _settable: Set<AudioDeviceID> = [1]
     private var _calls: [(muted: Bool, device: AudioDeviceID)] = []
+    private var _uidsByDevice: [AudioDeviceID: String] = [1: "device-1-uid"]
 
     var currentDevice: AudioDeviceID? {
         get { lock.withLock { _currentDevice } }
@@ -168,6 +170,14 @@ final class FakeMuteController: @unchecked Sendable {
         lock.withLock { _calls }
     }
 
+    /// Stable UID <-> AudioDeviceID map, mirroring SystemAudioController.deviceUID(for:) /
+    /// audioDeviceID(forUID:). Defaults to device 1 having a UID so tests that don't care
+    /// about UIDs still get a resolvable one.
+    var uidsByDevice: [AudioDeviceID: String] {
+        get { lock.withLock { _uidsByDevice } }
+        set { lock.withLock { _uidsByDevice = newValue } }
+    }
+
     func makeController() -> MuteController {
         MuteController(
             currentDeviceID: { [self] in lock.withLock { _currentDevice } },
@@ -178,7 +188,9 @@ final class FakeMuteController: @unchecked Sendable {
                     _calls.append((muted: muted, device: id))
                     _mutedState[id] = muted
                 }
-            }
+            },
+            deviceUID: { [self] id in lock.withLock { _uidsByDevice[id] } },
+            deviceID: { [self] uid in lock.withLock { _uidsByDevice.first(where: { $0.value == uid })?.key } }
         )
     }
 }
