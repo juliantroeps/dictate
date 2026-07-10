@@ -440,6 +440,14 @@ final class AudioCaptureManager {
                 return AudioCaptureManager.drainConverterTail(converter)
             }
             capturedSamples.append(contentsOf: tail)
+            // Tear the recording engine down (off-main) even while debouncing the
+            // settle/validate cycle. Without this the engine stays started with a live
+            // tap: if the user releases before the in-flight settle completes,
+            // stopRecording() no-ops on isRecording == false and nothing ever swaps the
+            // engine, leaving the mic hot and buffer growing until the next dictation.
+            // swapEngine bumps the epoch (old tap stops appending) and does not start a
+            // second settle cycle - the in-flight timer still owns that.
+            swapEngine()
             AppLogger.audio.debug("Config changed mid-settle, captured \(capturedSamples.count) samples")
             onEvent?(.recordingInterrupted(samples: capturedSamples))
             return

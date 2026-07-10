@@ -144,6 +144,11 @@ final class DictationCoordinator {
         // main-hop would still see keyHeld == true and record/persist a mute for a stale
         // device, leaving it muted after the hold ends.
         runtimeState.muteTask?.cancel()
+        // Restore any mute already recorded for a previous device before muting a new
+        // one. A mid-hold re-arm on a changed default output would otherwise overwrite
+        // activeMute/persisted UID and leave the previous device stuck muted with no
+        // record to recover it from.
+        restoreMuteIfNeeded()
         let muteController = self.muteController
         runtimeState.muteTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -304,6 +309,13 @@ final class DictationCoordinator {
     }
 
     func handleRecordingInterrupted(samples: [Float]) {
+        // Cancel any in-flight mute apply BEFORE restoring, mirroring handleKeyUp: with
+        // the apply deferred off-main, a still-in-flight task would otherwise record
+        // activeMute for the old device after this restore ran (keyHeld is still true
+        // here), and the following re-arm would overwrite it - leaking a stuck mute.
+        // The cancelled task's main-hop sees isCancelled and undoes its own mute.
+        runtimeState.muteTask?.cancel()
+        runtimeState.muteTask = nil
         restoreMuteIfNeeded()
 
         runtimeState.keyDownTime = nil
@@ -399,12 +411,15 @@ final class DictationCoordinator {
                 overlay.hide()
             } catch TranscriptionError.timeout {
                 AppLogger.transcription.warning("\(logLabel) timed out")
+                // Recover onto a fresh engine instance so the wedged one doesn't eat a
+                // second concurrent transcribe (and another timeout) on the next key-up.
+                // Run this BEFORE the stale-generation guard: the wedge lives on the
+                // shared engine instance, so a superseded timeout must still clear it or
+                // every subsequent dictation reuses the same wedged engine and times out.
+                // The wedged instance itself is never awaited here.
+                engineCoordinator.recover()
                 guard runtimeState.transcriptionGeneration == generation else { return }
                 overlay.showError("Transcription timed out", duration: 2.0)
-                // Recover onto a fresh engine instance so the wedged one doesn't
-                // eat a second concurrent transcribe (and another timeout) on the
-                // next key-up. The wedged instance itself is never awaited here.
-                engineCoordinator.recover()
             } catch {
                 AppLogger.transcription.error("\(logLabel) failed: \(error)")
                 guard runtimeState.transcriptionGeneration == generation else { return }
