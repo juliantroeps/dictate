@@ -76,7 +76,11 @@ final class DictationCoordinator {
     init(
         audioCapture: any AudioCapturing = AudioCaptureManager(),
         overlay: any OverlayControlling = OverlayController(),
-        engineCoordinator: any TranscriptionEngineCoordinating = EngineCoordinator(),
+        // No default: a default-argument generator that boxes a concrete @MainActor
+        // EngineCoordinator into this Sendable existential crashes SILGen on Swift 6.1.2
+        // (Xcode 16.4 / CI) once MuteController below is a nonisolated Sendable value.
+        // Every caller (AppDelegate + tests) passes this explicitly, so the default was dead.
+        engineCoordinator: any TranscriptionEngineCoordinating,
         settings: any DictationSettingsProviding = Settings.shared,
         runtimeState: DictationRuntimeState = DictationRuntimeState(),
         now: @escaping () -> DispatchTime = DispatchTime.now,
