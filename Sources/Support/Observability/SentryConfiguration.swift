@@ -95,7 +95,12 @@ enum SentryConfiguration {
         }
         let user = NSUserName()
         if !user.isEmpty {
-            result = result.replacingOccurrences(of: user, with: "<user>")
+            // Word-bounded so a short username that is a substring of an ordinary word
+            // (e.g. "sam" inside "samples") is not redacted - a raw substring replace both
+            // corrupts diagnostics and defeats the `^Captured \d+ samples` drop rule below,
+            // which runs on the already-scrubbed text.
+            let pattern = "\\b" + NSRegularExpression.escapedPattern(for: user) + "\\b"
+            result = result.replacingOccurrences(of: pattern, with: "<user>", options: .regularExpression)
         }
         result = result.replacingOccurrences(
             of: #"([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"#,
