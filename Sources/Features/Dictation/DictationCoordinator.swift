@@ -139,13 +139,19 @@ final class DictationCoordinator {
     /// key-up may already have restored/no-op'd while this was in flight.
     private func applyMuteIfNeeded() {
         guard settings.muteSystemAudio else { return }
+        // Supersede any in-flight apply (e.g. a re-arm on mid-hold device change, which
+        // does not otherwise cancel the prior task). Without this, an earlier task's late
+        // main-hop would still see keyHeld == true and record/persist a mute for a stale
+        // device, leaving it muted after the hold ends.
+        runtimeState.muteTask?.cancel()
         let muteController = self.muteController
         runtimeState.muteTask = Task { @MainActor [weak self] in
             guard let self else { return }
             guard let result = await self.performMuteApply(muteController) else { return }
-            guard self.runtimeState.keyHeld else {
-                // Key released while the apply was in flight - undo any mute we just
-                // applied off-main so the device does not stay muted after the hold ended.
+            guard self.runtimeState.keyHeld, !Task.isCancelled else {
+                // Hold ended, or this apply was superseded while in flight (fast release
+                // then re-press, or a device-change re-arm): undo any mute we just applied
+                // off-main so the device does not stay muted, and do not record activeMute.
                 if !result.priorMuted {
                     muteController.setMuted(false, result.deviceID)
                 }
