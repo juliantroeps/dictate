@@ -25,6 +25,7 @@ protocol DictationSettingsProviding: AnyObject {
     var minHoldDuration: Double { get }
     var muteSystemAudio: Bool { get }
     var noFocusBehavior: NoFocusBehavior { get }
+    var activeMuteDeviceUID: String? { get set }
 }
 
 extension AudioCaptureManager: AudioCapturing {}
@@ -33,20 +34,28 @@ extension Settings: DictationSettingsProviding {}
 
 /// Injectable abstraction for system output mute operations.
 /// Uses a struct-of-closures to match the project's existing injection style.
-/// All closures are MainActor-bound since DictationCoordinator is MainActor.
-@MainActor
-struct MuteController {
-    var currentDeviceID: () -> AudioDeviceID?
-    var isMuted: (AudioDeviceID) -> Bool
-    var isSettable: (AudioDeviceID) -> Bool
-    var setMuted: (Bool, AudioDeviceID) -> Void
+/// Not MainActor-bound: the closures wrap nonisolated SystemAudioController HAL
+/// calls and are invoked off the main actor (see DictationCoordinator.performMuteApply)
+/// so a key-down does not block on blocking AudioObject*PropertyData calls.
+struct MuteController: Sendable {
+    var currentDeviceID: @Sendable () -> AudioDeviceID?
+    var isMuted: @Sendable (AudioDeviceID) -> Bool
+    var isSettable: @Sendable (AudioDeviceID) -> Bool
+    var setMuted: @Sendable (Bool, AudioDeviceID) -> Void
+    /// Resolve a device's stable UID, persisted so a mute can be restored even if
+    /// the device's AudioDeviceID changes (BT reconnect) or disappears entirely.
+    var deviceUID: @Sendable (AudioDeviceID) -> String?
+    /// Resolve a persisted UID back to a current AudioDeviceID (nil if not present).
+    var deviceID: @Sendable (String) -> AudioDeviceID?
 
     /// Default implementation wired to SystemAudioController.
     static let system = MuteController(
         currentDeviceID: { SystemAudioController.currentDefaultOutputDeviceID },
         isMuted: { SystemAudioController.isMuted(on: $0) },
         isSettable: { SystemAudioController.isMutePropertySettable(on: $0) },
-        setMuted: { SystemAudioController.setMuted($0, on: $1) }
+        setMuted: { SystemAudioController.setMuted($0, on: $1) },
+        deviceUID: { SystemAudioController.deviceUID(for: $0) },
+        deviceID: { SystemAudioController.audioDeviceID(forUID: $0) }
     )
 }
 
@@ -60,19 +69,25 @@ final class DictationCoordinator {
     private let transcriptionTimeout: Duration
     private let injectText: @MainActor (String) -> TextInjector.Result
     private let hasInjectableTarget: @MainActor () -> Bool
+    private let copyToClipboard: @MainActor (String) -> Void
     private let muteController: MuteController
     let runtimeState: DictationRuntimeState
 
     init(
         audioCapture: any AudioCapturing = AudioCaptureManager(),
         overlay: any OverlayControlling = OverlayController(),
-        engineCoordinator: any TranscriptionEngineCoordinating = EngineCoordinator(),
+        // No default: a default-argument generator that boxes a concrete @MainActor
+        // EngineCoordinator into this Sendable existential crashes SILGen on Swift 6.1.2
+        // (Xcode 16.4 / CI) once MuteController below is a nonisolated Sendable value.
+        // Every caller (AppDelegate + tests) passes this explicitly, so the default was dead.
+        engineCoordinator: any TranscriptionEngineCoordinating,
         settings: any DictationSettingsProviding = Settings.shared,
         runtimeState: DictationRuntimeState = DictationRuntimeState(),
         now: @escaping () -> DispatchTime = DispatchTime.now,
         transcriptionTimeout: Duration = .seconds(30),
         injectText: @escaping @MainActor (String) -> TextInjector.Result = TextInjector.inject,
         hasInjectableTarget: @escaping @MainActor () -> Bool = TextInjector.hasInjectableTarget,
+        copyToClipboard: @escaping @MainActor (String) -> Void = { TextInjector.copyToClipboard($0) },
         muteController: MuteController = .system
     ) {
         self.audioCapture = audioCapture
@@ -84,6 +99,7 @@ final class DictationCoordinator {
         self.transcriptionTimeout = transcriptionTimeout
         self.injectText = injectText
         self.hasInjectableTarget = hasInjectableTarget
+        self.copyToClipboard = copyToClipboard
         self.muteController = muteController
 
         self.engineCoordinator.onReady = { [weak self] in self?.flushPendingSamples() }
@@ -100,22 +116,99 @@ final class DictationCoordinator {
         guard let m = runtimeState.activeMute else { return }
         muteController.setMuted(m.priorMuted, m.deviceID)
         runtimeState.activeMute = nil
+        settings.activeMuteDeviceUID = nil
+    }
+
+    /// Recover a mute left over from a previous crash/force-quit that killed the
+    /// process mid-hold. Resolves the persisted device UID so this survives that
+    /// device having disappeared (or a different default output at this launch);
+    /// falls back to unmuting the current default output device. Always clears the
+    /// persisted record so a stale/unresolvable UID cannot wedge future launches.
+    /// SIGKILL cannot be caught; launch is the only recovery path for that scenario.
+    func recoverPersistedMuteOnLaunch() {
+        defer { settings.activeMuteDeviceUID = nil }
+        if let uid = settings.activeMuteDeviceUID, let deviceID = muteController.deviceID(uid) {
+            muteController.setMuted(false, deviceID)
+            return
+        }
+        if let deviceID = muteController.currentDeviceID() {
+            muteController.setMuted(false, deviceID)
+        }
     }
 
     /// Apply system-output mute for the current default device if the user enabled
-    /// it and the device is settable. Records activeMute only when we actually mute
-    /// (i.e. the user had not already muted it deliberately).
+    /// it and the device is settable. The blocking HAL calls run off the main actor
+    /// (performMuteApply) so key-down handling stays snappy during device churn;
+    /// the result is applied back on main only if the key is still held - a fast
+    /// key-up may already have restored/no-op'd while this was in flight.
     private func applyMuteIfNeeded() {
-        if settings.muteSystemAudio,
-           let deviceID = muteController.currentDeviceID(),
-           muteController.isSettable(deviceID) {
-            let priorMuted = muteController.isMuted(deviceID)
-            if !priorMuted {
-                // Only mute if the user hasn't already muted - don't clobber deliberate mutes.
-                muteController.setMuted(true, deviceID)
-                runtimeState.activeMute = ActiveMute(deviceID: deviceID, priorMuted: priorMuted)
+        guard settings.muteSystemAudio else { return }
+        // Supersede any in-flight apply (e.g. a re-arm on mid-hold device change, which
+        // does not otherwise cancel the prior task). Without this, an earlier task's late
+        // main-hop would still see keyHeld == true and record/persist a mute for a stale
+        // device, leaving it muted after the hold ends.
+        runtimeState.muteTask?.cancel()
+        // Restore any mute already recorded for a previous device before muting a new
+        // one. A mid-hold re-arm on a changed default output would otherwise overwrite
+        // activeMute/persisted UID and leave the previous device stuck muted with no
+        // record to recover it from.
+        restoreMuteIfNeeded()
+        let muteController = self.muteController
+        runtimeState.muteTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let result = await self.performMuteApply(muteController) else { return }
+            guard self.runtimeState.keyHeld, !Task.isCancelled else {
+                // Hold ended, or this apply was superseded while in flight (fast release
+                // then re-press, or a device-change re-arm): undo any mute we just applied
+                // off-main so the device does not stay muted, and do not record activeMute.
+                if !result.priorMuted {
+                    muteController.setMuted(false, result.deviceID)
+                }
+                return
             }
-            // If already muted, leave activeMute nil - key-up will no-op correctly.
+            if !result.priorMuted {
+                // Only record activeMute if we actually muted - don't clobber a
+                // deliberate user mute (priorMuted == true means we left it alone).
+                self.runtimeState.activeMute = ActiveMute(deviceID: result.deviceID, priorMuted: result.priorMuted)
+                // Persist the UID (not the ID) so a crash mid-hold can be recovered
+                // from at next launch even if this device disappears or its ID changes.
+                self.settings.activeMuteDeviceUID = result.deviceUID
+            }
+        }
+    }
+
+    /// Outcome of an off-main mute apply: the targeted device and whether it was
+    /// already muted before we touched it. nil (not settable) is handled by the
+    /// caller reading an Optional return from performMuteApply.
+    private struct MuteApplyResult: Sendable {
+        let deviceID: AudioDeviceID
+        let priorMuted: Bool
+        let deviceUID: String?
+    }
+
+    /// Runs currentDeviceID/isSettable/isMuted/setMuted off the main actor.
+    /// AudioObject*PropertyData calls block synchronously and can stall while a
+    /// device is mid-transition (mirrors AudioCaptureManager's HAL-off-main
+    /// pattern); doing this on main at every key-down would beachball the UI
+    /// during Bluetooth churn. nonisolated so the dispatch genuinely leaves main.
+    nonisolated private func performMuteApply(_ muteController: MuteController) async -> MuteApplyResult? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                guard let deviceID = muteController.currentDeviceID(),
+                    muteController.isSettable(deviceID)
+                else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let priorMuted = muteController.isMuted(deviceID)
+                if !priorMuted {
+                    // Only mute if the user hasn't already muted - don't clobber deliberate mutes.
+                    muteController.setMuted(true, deviceID)
+                }
+                let deviceUID = muteController.deviceUID(deviceID)
+                continuation.resume(
+                    returning: MuteApplyResult(deviceID: deviceID, priorMuted: priorMuted, deviceUID: deviceUID))
+            }
         }
     }
 
@@ -143,6 +236,8 @@ final class DictationCoordinator {
         runtimeState.transcriptionGeneration += 1
         runtimeState.recordingStartTask?.cancel()
         runtimeState.recordingStartTask = nil
+        runtimeState.muteTask?.cancel()
+        runtimeState.muteTask = nil
         // Discard any stale pending buffer from a prior not-ready key-up - a fresh
         // session starting means we'll capture new audio from scratch.
         runtimeState.pendingSamples = nil
@@ -163,7 +258,12 @@ final class DictationCoordinator {
                 return
             } catch {
                 AppLogger.audio.error("Failed to start recording: \(error)")
-                self.overlay.hide()
+                // Clear keyDownTime so a following key-up sees no active session
+                // and does not try to transcribe silence from a mic that never
+                // started - the error overlay below is the only feedback the
+                // user gets instead of the pill silently fading mid-hold.
+                self.runtimeState.keyDownTime = nil
+                self.overlay.showError("Microphone unavailable", duration: 2.0)
             }
         }
     }
@@ -172,6 +272,12 @@ final class DictationCoordinator {
         runtimeState.keyHeld = false
         runtimeState.recordingStartTask?.cancel()
         runtimeState.recordingStartTask = nil
+        // Cancel (and clear keyHeld above) BEFORE restoreMuteIfNeeded: an
+        // applyMuteIfNeeded task still in flight sees !keyHeld on its main-hop and
+        // undoes its own mute, so the sync restore below and that undo can't race
+        // each other into leaving the device muted.
+        runtimeState.muteTask?.cancel()
+        runtimeState.muteTask = nil
 
         restoreMuteIfNeeded()
 
@@ -207,6 +313,13 @@ final class DictationCoordinator {
     }
 
     func handleRecordingInterrupted(samples: [Float]) {
+        // Cancel any in-flight mute apply BEFORE restoring, mirroring handleKeyUp: with
+        // the apply deferred off-main, a still-in-flight task would otherwise record
+        // activeMute for the old device after this restore ran (keyHeld is still true
+        // here), and the following re-arm would overwrite it - leaking a stuck mute.
+        // The cancelled task's main-hop sees isCancelled and undoes its own mute.
+        runtimeState.muteTask?.cancel()
+        runtimeState.muteTask = nil
         restoreMuteIfNeeded()
 
         runtimeState.keyDownTime = nil
@@ -224,7 +337,8 @@ final class DictationCoordinator {
         }
 
         guard engineCoordinator.isReady else {
-            AppLogger.transcription.info("Engine not ready during interruption; buffering \(samples.count) samples for flush on ready")
+            AppLogger.transcription.info(
+                "Engine not ready during interruption; buffering \(samples.count) samples for flush on ready")
             runtimeState.pendingSamples = samples
             overlay.showModelLoading()
             engineCoordinator.prepare(attempts: 1)
@@ -232,7 +346,8 @@ final class DictationCoordinator {
         }
 
         let duration = Double(samples.count) / 16_000.0
-        AppLogger.audio.info("Transcribing interrupted recording: \(samples.count) samples (\(String(format: "%.1f", duration))s)")
+        AppLogger.audio.info(
+            "Transcribing interrupted recording: \(samples.count) samples (\(String(format: "%.1f", duration))s)")
 
         overlay.state.phase = .processing
 
@@ -251,6 +366,7 @@ final class DictationCoordinator {
         let overlay = self.overlay
         let injectText = self.injectText
         let hasInjectableTarget = self.hasInjectableTarget
+        let copyToClipboard = self.copyToClipboard
         let runtimeState = self.runtimeState
         let transcriptionTimeout = self.transcriptionTimeout
 
@@ -263,17 +379,8 @@ final class DictationCoordinator {
             }
 
             do {
-                let text = try await withThrowingTaskGroup(of: String.self) { group in
-                    group.addTask {
-                        try await engineCoordinator.transcribe(audioSamples: samples)
-                    }
-                    group.addTask {
-                        try await Task.sleep(for: transcriptionTimeout)
-                        throw TranscriptionError.timeout
-                    }
-                    let result = try await group.next()!
-                    group.cancelAll()
-                    return result
+                let text = try await raceAgainstTimeout(transcriptionTimeout) {
+                    try await engineCoordinator.transcribe(audioSamples: samples)
                 }
 
                 // Stale-session guard: a newer session has taken over.
@@ -284,10 +391,19 @@ final class DictationCoordinator {
                     return
                 }
 
-                if settings.noFocusBehavior == .discard, !hasInjectableTarget() {
-                    AppLogger.input.info("No text field and discard mode - dropping dictation without touching clipboard")
-                    overlay.hide()
-                    return
+                if !hasInjectableTarget() {
+                    switch settings.noFocusBehavior {
+                    case .discard:
+                        AppLogger.input.info(
+                            "No text field and discard mode - dropping dictation without touching clipboard")
+                        overlay.hide()
+                        return
+                    case .clipboard:
+                        AppLogger.input.info("No text field and clipboard mode - copying dictation to clipboard")
+                        copyToClipboard(text)
+                        overlay.showInfo("Copied to clipboard", duration: 2.0)
+                        return
+                    }
                 }
 
                 let result = injectText(text)
@@ -299,6 +415,13 @@ final class DictationCoordinator {
                 overlay.hide()
             } catch TranscriptionError.timeout {
                 AppLogger.transcription.warning("\(logLabel) timed out")
+                // Recover onto a fresh engine instance so the wedged one doesn't eat a
+                // second concurrent transcribe (and another timeout) on the next key-up.
+                // Run this BEFORE the stale-generation guard: the wedge lives on the
+                // shared engine instance, so a superseded timeout must still clear it or
+                // every subsequent dictation reuses the same wedged engine and times out.
+                // The wedged instance itself is never awaited here.
+                engineCoordinator.recover()
                 guard runtimeState.transcriptionGeneration == generation else { return }
                 overlay.showError("Transcription timed out", duration: 2.0)
             } catch {
@@ -347,9 +470,75 @@ final class DictationCoordinator {
                 return
             } catch {
                 AppLogger.audio.error("Failed to restart recording after device change: \(error)")
-                self.overlay.hide()
+                self.runtimeState.keyDownTime = nil
+                self.overlay.showError("Microphone unavailable", duration: 2.0)
             }
         }
     }
 
+}
+
+// MARK: - Timeout race
+
+/// Races an unstructured transcription task against a timeout.
+///
+/// `withThrowingTaskGroup` cannot be used here: exiting its closure implicitly
+/// awaits every child task, including the loser. A wedged CoreML call that
+/// never checks cancellation would then block this function forever - exactly
+/// the case the timeout exists for. Instead, `operation` runs as a detached-
+/// from-structure `Task` that is left orphaned on timeout; its late result (if
+/// any) is discarded by the caller's transcriptionGeneration guard.
+private func raceAgainstTimeout(
+    _ timeout: Duration,
+    operation: @escaping @Sendable () async throws -> String
+) async throws -> String {
+    let operationTask = Task { try await operation() }
+
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+            let resumeOnce = SingleResumeContinuation(continuation)
+
+            let timeoutTask = Task {
+                try? await Task.sleep(for: timeout)
+                resumeOnce.resume(.failure(TranscriptionError.timeout))
+            }
+
+            Task {
+                do {
+                    let text = try await operationTask.value
+                    timeoutTask.cancel()
+                    resumeOnce.resume(.success(text))
+                } catch {
+                    timeoutTask.cancel()
+                    resumeOnce.resume(.failure(error))
+                }
+            }
+        }
+    } onCancel: {
+        // Translate outer-task cancellation (e.g. handleRecordingInterrupted)
+        // into a CancellationError resume via the operation's own cancellation
+        // handling, rather than resuming the continuation directly here.
+        operationTask.cancel()
+    }
+}
+
+/// Guards a `CheckedContinuation` that can be raced to completion from
+/// multiple tasks (operation success/failure, timeout, cancellation).
+/// Resuming a continuation more than once is a runtime crash, so every
+/// caller after the first must be a no-op.
+private final class SingleResumeContinuation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<String, Error>?
+
+    init(_ continuation: CheckedContinuation<String, Error>) {
+        self.continuation = continuation
+    }
+
+    func resume(_ result: Result<String, Error>) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(with: result)
+    }
 }

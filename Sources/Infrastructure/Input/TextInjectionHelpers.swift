@@ -1,5 +1,5 @@
-@preconcurrency import ApplicationServices
 import AppKit
+@preconcurrency import ApplicationServices
 import Foundation
 
 enum TextInjectionStrategy: String {
@@ -10,12 +10,18 @@ enum TextInjectionStrategy: String {
 
 @MainActor
 struct ClipboardRestorer {
+    private let pasteboard: NSPasteboard
     private let savedItems: [NSPasteboardItem]
 
     init(pasteboard: NSPasteboard = .general) {
+        self.pasteboard = pasteboard
         savedItems = (pasteboard.pasteboardItems ?? []).map { item -> NSPasteboardItem in
             let copy = NSPasteboardItem()
             for type in item.types {
+                // Skip promise-backed types (e.g. file-promise providers) - materializing
+                // their data via `data(forType:)` resolves the promise on the main thread,
+                // which we don't want just to snapshot the pasteboard for restore.
+                if type.rawValue.lowercased().contains("promise") { continue }
                 if let data = item.data(forType: type) {
                     copy.setData(data, forType: type)
                 }
@@ -24,11 +30,19 @@ struct ClipboardRestorer {
         }
     }
 
+    /// Callers construct the restorer BEFORE overwriting the pasteboard with the
+    /// dictation (to snapshot the prior contents), then call `restore()` AFTER the
+    /// write - so `pasteboard.changeCount` here is the post-write count. If the
+    /// count differs when the delay elapses, our write is no longer on top (a
+    /// concurrent copy landed, or the user copied something else) and restoring
+    /// would clobber it, so we skip.
     func restore(after delay: Duration = .milliseconds(350)) {
         let savedItems = savedItems
+        let pasteboard = pasteboard
+        let savedChangeCount = pasteboard.changeCount
         Task { @MainActor in
             try? await Task.sleep(for: delay)
-            let pasteboard = NSPasteboard.general
+            guard pasteboard.changeCount == savedChangeCount else { return }
             pasteboard.clearContents()
             if !savedItems.isEmpty {
                 pasteboard.writeObjects(savedItems)
@@ -81,7 +95,8 @@ enum FocusedTextElementLocator {
 
     static func selectedTextRange(of element: AXUIElement) -> CFRange? {
         var rangeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success else { return nil }
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success
+        else { return nil }
         var range = CFRange(location: 0, length: 0)
         guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &range) else { return nil }
         return range
@@ -92,7 +107,8 @@ enum FocusedTextElementLocator {
         for _ in 0..<20 {
             var parentRef: CFTypeRef?
             guard AXUIElementCopyAttributeValue(current, kAXParentAttribute as CFString, &parentRef) == .success,
-                  let parent = parentRef else { break }
+                let parent = parentRef
+            else { break }
             let axParent = parent as! AXUIElement
             var roleRef: CFTypeRef?
             AXUIElementCopyAttributeValue(axParent, kAXRoleAttribute as CFString, &roleRef)
@@ -109,9 +125,9 @@ enum TextSplice {
         let nsValue = value as NSString
         let length = nsValue.length
         guard range.location >= 0,
-              range.length >= 0,
-              range.location <= length,
-              length - range.location >= range.length
+            range.length >= 0,
+            range.location <= length,
+            length - range.location >= range.length
         else { return nil }
         return nsValue.replacingCharacters(
             in: NSRange(location: range.location, length: range.length),
@@ -124,13 +140,15 @@ enum ValueSpliceInjector {
     static func inject(element: AXUIElement, text: String) -> Bool {
         var valueRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef) == .success,
-              let currentValue = valueRef as? String else { return false }
+            let currentValue = valueRef as? String
+        else { return false }
 
         guard let range = FocusedTextElementLocator.selectedTextRange(of: element) else { return false }
 
         guard let newValue = TextSplice.splice(value: currentValue, range: range, with: text) else { return false }
 
-        guard AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, newValue as CFTypeRef) == .success else { return false }
+        guard AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, newValue as CFTypeRef) == .success
+        else { return false }
 
         let newCursorPos = range.location + text.utf16.count
         var newRange = CFRange(location: newCursorPos, length: 0)
@@ -139,7 +157,8 @@ enum ValueSpliceInjector {
         }
 
         guard let afterRange = FocusedTextElementLocator.selectedTextRange(of: element),
-              afterRange.location == newCursorPos, afterRange.length == 0 else {
+            afterRange.location == newCursorPos, afterRange.length == 0
+        else {
             return false
         }
 

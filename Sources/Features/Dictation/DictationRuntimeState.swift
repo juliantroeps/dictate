@@ -21,6 +21,10 @@ final class DictationRuntimeState {
     var keyDownTime: DispatchTime?
     var recordingStartTask: Task<Void, Never>?
     var transcriptionTask: Task<Void, Never>?
+    /// Off-main mute-apply task spawned by applyMuteIfNeeded. Cancelled (and
+    /// re-guarded via keyHeld) at key-up so a fast release can't leave the
+    /// device muted from an apply that was still in flight.
+    var muteTask: Task<Void, Never>?
     /// Monotonic token; only the task whose captured generation still matches
     /// may mutate phase/overlay or nil out the task handle. Guards against a
     /// late-resuming cancelled transcription stomping a newer session's state.

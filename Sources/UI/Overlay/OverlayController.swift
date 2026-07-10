@@ -141,9 +141,10 @@ final class OverlayController {
     }
 
     private func positionWindow(_ window: NSWindow) {
-        let targetScreen = NSScreen.screens.first {
-            $0.frame.contains(NSEvent.mouseLocation)
-        } ?? NSScreen.main
+        let targetScreen =
+            NSScreen.screens.first {
+                $0.frame.contains(NSEvent.mouseLocation)
+            } ?? NSScreen.main
         guard let screen = targetScreen else { return }
         let screenFrame = screen.frame
         let windowSize = window.frame.size

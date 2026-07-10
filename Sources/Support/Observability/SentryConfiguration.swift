@@ -43,18 +43,37 @@ enum SentryConfiguration {
             options.enableNetworkBreadcrumbs = false
             options.maxBreadcrumbs = 50
 
-            /// Backstop: strip PII even though none is intentionally attached.
+            /// Backstop: strip PII even though none is intentionally attached, and scrub
+            /// the event message / breadcrumb text in case an unscrubbed call site slips
+            /// diagnostic text with a path/username/device UID through.
             options.beforeSend = { event in
                 event.user?.ipAddress = nil
                 event.user?.email = nil
                 event.request = nil
+                if let formatted = event.message?.formatted {
+                    event.message = SentryMessage(formatted: scrub(formatted))
+                }
+                event.breadcrumbs = event.breadcrumbs?.map { crumb in
+                    if let message = crumb.message {
+                        crumb.message = scrub(message)
+                    }
+                    return crumb
+                }
                 return event
             }
 
-            /// Backstop: drop console/log breadcrumbs that could carry app text.
+            /// Backstop: drop console/log breadcrumbs that could carry app text, drop
+            /// routine capture-size breadcrumbs (dictation length/timing is not something
+            /// that needs to leave the device), and scrub the rest.
             options.beforeBreadcrumb = { crumb in
                 if crumb.category == "console" {
                     return nil
+                }
+                if let message = crumb.message {
+                    if message.range(of: #"^Captured \d+ samples"#, options: .regularExpression) != nil {
+                        return nil
+                    }
+                    crumb.message = scrub(message)
                 }
                 return crumb
             }
@@ -63,22 +82,51 @@ enum SentryConfiguration {
         emitVerifyEventIfRequested()
     }
 
+    /// Redacts PII-shaped substrings from a diagnostic message before it leaves the
+    /// device: the user's home directory path, username, and MAC-like device UIDs
+    /// (Bluetooth device identifiers are MAC-derived, so a raw UID is effectively a
+    /// hardware fingerprint). Applied at the call site (breadcrumb/captureError below)
+    /// and again as a backstop in beforeSend/beforeBreadcrumb.
+    static func scrub(_ message: String) -> String {
+        var result = message
+        let home = NSHomeDirectory()
+        if !home.isEmpty {
+            result = result.replacingOccurrences(of: home, with: "~")
+        }
+        let user = NSUserName()
+        if !user.isEmpty {
+            // Word-bounded so a short username that is a substring of an ordinary word
+            // (e.g. "sam" inside "samples") is not redacted - a raw substring replace both
+            // corrupts diagnostics and defeats the `^Captured \d+ samples` drop rule below,
+            // which runs on the already-scrubbed text.
+            let pattern = "\\b" + NSRegularExpression.escapedPattern(for: user) + "\\b"
+            result = result.replacingOccurrences(of: pattern, with: "<user>", options: .regularExpression)
+        }
+        result = result.replacingOccurrences(
+            of: #"([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"#,
+            with: "<device-uid>",
+            options: .regularExpression
+        )
+        return result
+    }
+
     /// Records a non-error log line (info/warning) as a breadcrumb. Breadcrumbs travel only
     /// as context attached to a later captured event or crash, never on their own. Pass
     /// diagnostic text only - never transcript content.
     static func breadcrumb(category: String, message: String, warning: Bool = false) {
         let crumb = Breadcrumb(level: warning ? .warning : .info, category: category)
-        crumb.message = message
+        crumb.message = scrub(message)
         SentrySDK.addBreadcrumb(crumb)
     }
 
     /// Reports an error log line as a Sentry event so unexpected non-crash failures are
     /// visible, with recent breadcrumbs attached automatically. Diagnostic text only.
     static func captureError(category: String, message: String) {
+        let scrubbed = scrub(message)
         let crumb = Breadcrumb(level: .error, category: category)
-        crumb.message = message
+        crumb.message = scrubbed
         SentrySDK.addBreadcrumb(crumb)
-        SentrySDK.capture(message: message) { scope in
+        SentrySDK.capture(message: scrubbed) { scope in
             scope.setLevel(.error)
             scope.setTag(value: category, key: "log.category")
         }

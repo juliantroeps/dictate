@@ -1,5 +1,5 @@
 import Foundation
-import WhisperKit
+@preconcurrency import WhisperKit
 
 // MARK: - Protocol
 
@@ -8,18 +8,26 @@ protocol TranscriptionEngine: Sendable {
     var isReady: Bool { get }
     func prepare() async throws
     func transcribe(audioSamples: [Float]) async throws -> String
-    func unload()
+    func unload() async
 }
 
 // MARK: - WhisperKitEngine
 
-final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
+/// Actor-isolated so `prepare`/`transcribe`/`unload` can never race a model
+/// swap - `whisperKit`/`promptTokens` are only ever touched on the actor's
+/// own executor, whichever thread that happens to be.
+actor WhisperKitEngine: TranscriptionEngine {
     let name = "WhisperKit"
     private var whisperKit: WhisperKit?
     private var promptTokens: [Int]?
     private let model: String
 
-    var isReady: Bool { whisperKit != nil }
+    // isReady must be readable synchronously (EngineCoordinator.isReady is a
+    // plain, non-async property), so it's tracked outside actor isolation
+    // under a lock rather than derived from `whisperKit != nil`.
+    private let readyLock = NSLock()
+    nonisolated(unsafe) private var _isReady = false
+    nonisolated var isReady: Bool { readyLock.withLock { _isReady } }
 
     init(model: String = "openai_whisper-tiny.en") {
         self.model = model
@@ -28,7 +36,10 @@ final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
     func prepare() async throws {
         guard whisperKit == nil else { return }
         AppLogger.transcription.info("Loading WhisperKit model: \(self.model)")
-        let config = WhisperKitConfig(model: self.model, load: true)
+        // prewarm: true moves CoreML/ANE specialization into this background
+        // load (already covered by the loading pill) instead of the first
+        // transcribe call.
+        let config = WhisperKitConfig(model: self.model, prewarm: true, load: true)
         if let cached = cachedModelFolder() {
             AppLogger.transcription.debug("Using cached WhisperKit model folder")
             config.modelFolder = cached
@@ -50,18 +61,24 @@ final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
         }
 
         AppLogger.transcription.info("WhisperKit ready")
+        readyLock.withLock { _isReady = true }
     }
 
-    func unload() {
+    func unload() async {
         whisperKit = nil
         promptTokens = nil
+        readyLock.withLock { _isReady = false }
     }
 
     private func cachedModelFolder() -> String? {
-        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            return nil
+        }
         let path = docs.appendingPathComponent("huggingface/models/argmaxinc/whisperkit-coreml/\(model)")
         var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path.path, isDirectory: &isDir), isDir.boolValue else { return nil }
+        guard FileManager.default.fileExists(atPath: path.path, isDirectory: &isDir), isDir.boolValue else {
+            return nil
+        }
         let contents = (try? FileManager.default.contentsOfDirectory(atPath: path.path)) ?? []
         guard contents.contains(where: { $0.hasSuffix(".mlmodelc") }) else { return nil }
         return path.path
@@ -77,15 +94,30 @@ final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
             options.promptTokens = tokens
             options.usePrefillPrompt = true
         }
+        // Interactive-dictation latency/quality tradeoffs: timestamps are
+        // decoded but never used by dictation, and the default fallback of
+        // 5 full-window re-decodes on low confidence causes occasional
+        // 3-5x slow dictations. Keep these conservative, not zero.
+        options.withoutTimestamps = true
+        options.temperatureFallbackCount = 1
 
+        #if DEBUG
+            let start = Date()
+        #endif
         let results = try await wk.transcribe(audioArray: audioSamples, decodeOptions: options)
+        #if DEBUG
+            let elapsed = Date().timeIntervalSince(start)
+            let audioSeconds = Double(audioSamples.count) / 16_000
+            AppLogger.transcription.debug(
+                String(format: "Transcribe wall=%.2fs audio=%.2fs", elapsed, audioSeconds))
+        #endif
         let text = results.first?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         #if DEBUG
-        if text.isEmpty {
-            AppLogger.transcription.debug("Transcription result empty")
-        } else {
-            AppLogger.transcription.debug("Transcription result length=\(text.count)")
-        }
+            if text.isEmpty {
+                AppLogger.transcription.debug("Transcription result empty")
+            } else {
+                AppLogger.transcription.debug("Transcription result length=\(text.count)")
+            }
         #endif
         return text
     }

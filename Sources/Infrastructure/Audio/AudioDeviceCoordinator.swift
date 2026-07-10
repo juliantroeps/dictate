@@ -68,7 +68,8 @@ final class AudioDeviceCoordinator {
 
     func applyStartupSelectionIfNeeded() {
         guard let uid = settings.selectedInputDeviceUID,
-              let deviceID = audioDevices.audioDeviceID(forUID: uid) else { return }
+            let deviceID = audioDevices.audioDeviceID(forUID: uid)
+        else { return }
         audioDevices.setDefaultInputDevice(deviceID)
     }
 
@@ -124,7 +125,7 @@ final class AudioDeviceCoordinator {
 
         let activeName: String
         if let resolvedSelectedID,
-           let name = audioDevices.deviceName(for: resolvedSelectedID)
+            let name = audioDevices.deviceName(for: resolvedSelectedID)
         {
             activeName = name
         } else {
@@ -135,7 +136,7 @@ final class AudioDeviceCoordinator {
 
     private func handleSelectionChange() {
         if let uid = settings.selectedInputDeviceUID,
-           let deviceID = audioDevices.audioDeviceID(forUID: uid)
+            let deviceID = audioDevices.audioDeviceID(forUID: uid)
         {
             audioDevices.setDefaultInputDevice(deviceID)
             return

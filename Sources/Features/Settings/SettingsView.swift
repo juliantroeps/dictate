@@ -71,14 +71,17 @@ struct SettingsView: View {
 
                 Toggle("Mute system audio while recording", isOn: Bindable(settings).muteSystemAudio)
 
-                Picker("Input", selection: Binding<AudioDeviceID?>(
-                    get: {
-                        refreshController.selectedInputDeviceID
-                    },
-                    set: { (newID: AudioDeviceID?) in
-                        refreshController.setSelectedInputDeviceID(newID)
-                    }
-                )) {
+                Picker(
+                    "Input",
+                    selection: Binding<AudioDeviceID?>(
+                        get: {
+                            refreshController.selectedInputDeviceID
+                        },
+                        set: { (newID: AudioDeviceID?) in
+                            refreshController.setSelectedInputDeviceID(newID)
+                        }
+                    )
+                ) {
                     Text("Automatic").tag(AudioDeviceID?.none)
                     ForEach(refreshController.inputDevices, id: \.id) { device in
                         Text(device.name).tag(Optional(device.id))
@@ -107,10 +110,12 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("General").font(.subheadline).foregroundStyle(.secondary)
 
-                Toggle("Launch at login", isOn: Binding(
-                    get: { settings.launchAtLogin },
-                    set: { settings.launchAtLogin = $0 }
-                ))
+                Toggle(
+                    "Launch at login",
+                    isOn: Binding(
+                        get: { settings.launchAtLogin },
+                        set: { settings.launchAtLogin = $0 }
+                    ))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -126,7 +131,11 @@ struct SettingsView: View {
                             .foregroundColor(.green)
                     } else {
                         Button {
-                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+                            NSWorkspace.shared.open(
+                                URL(
+                                    string:
+                                        "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
+                            )
                         } label: {
                             Label("Accessibility", systemImage: "exclamationmark.triangle.fill")
                                 .foregroundColor(.orange)
