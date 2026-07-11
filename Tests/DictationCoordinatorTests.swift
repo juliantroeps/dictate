@@ -721,7 +721,7 @@ struct DictationCoordinatorTests {
     }
 
     @Test @MainActor
-    func clipboardModeWithNoTarget_copiesInsteadOfInjecting() async {
+    func clipboardModeWithNoTarget_pastesKeepingClipboard() async {
         let settings = FakeDictationSettings()
         settings.minHoldDuration = 0.1
         settings.muteSystemAudio = false
@@ -733,7 +733,7 @@ struct DictationCoordinatorTests {
         let engine = FakeTranscriptionEngineCoordinator()
         engine.isReady = true
         var injectedTexts: [String] = []
-        var copiedTexts: [String] = []
+        var pastedKeptTexts: [String] = []
 
         let coordinator = DictationCoordinator(
             audioCapture: audioCapture,
@@ -746,7 +746,7 @@ struct DictationCoordinatorTests {
                 return .injected
             },
             hasInjectableTarget: { false },
-            copyToClipboard: { text in copiedTexts.append(text) }
+            pasteKeepingClipboard: { text in pastedKeptTexts.append(text) }
         )
 
         coordinator.handleKeyDown()
@@ -756,7 +756,7 @@ struct DictationCoordinatorTests {
         await coordinator.runtimeState.transcriptionTask?.value
 
         #expect(injectedTexts.isEmpty)
-        #expect(copiedTexts == ["transcribed text"])
+        #expect(pastedKeptTexts == ["transcribed text"])
         #expect(overlay.shownInfos == ["Copied to clipboard"])
         #expect(overlay.state.phase == .info("Copied to clipboard"))
     }
@@ -774,7 +774,7 @@ struct DictationCoordinatorTests {
         let engine = FakeTranscriptionEngineCoordinator()
         engine.isReady = true
         var injectedTexts: [String] = []
-        var copiedTexts: [String] = []
+        var pastedKeptTexts: [String] = []
 
         let coordinator = DictationCoordinator(
             audioCapture: audioCapture,
@@ -787,7 +787,7 @@ struct DictationCoordinatorTests {
                 return .injected
             },
             hasInjectableTarget: { true },
-            copyToClipboard: { text in copiedTexts.append(text) }
+            pasteKeepingClipboard: { text in pastedKeptTexts.append(text) }
         )
 
         coordinator.handleKeyDown()
@@ -797,7 +797,7 @@ struct DictationCoordinatorTests {
         await coordinator.runtimeState.transcriptionTask?.value
 
         #expect(injectedTexts == ["transcribed text"])
-        #expect(copiedTexts.isEmpty)
+        #expect(pastedKeptTexts.isEmpty)
         #expect(overlay.shownInfos.isEmpty)
         #expect(overlay.state.phase == .idle)
     }
