@@ -402,7 +402,7 @@ final class DictationCoordinator {
                         AppLogger.input.info(
                             "No text field and clipboard mode - pasting, leaving dictation on clipboard")
                         pasteKeepingClipboard(text)
-                        overlay.hide()
+                        overlay.showInfo("Copied to clipboard", duration: 2.0)
                         return
                     }
                 }

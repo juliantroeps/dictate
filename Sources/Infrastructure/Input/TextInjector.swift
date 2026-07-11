@@ -42,16 +42,18 @@ enum TextInjector {
         case copiedToClipboard
     }
 
-    /// True if there is a frontmost app with a focused text element that `inject`
-    /// can place text into - whether it writes directly (native fields) or pastes
-    /// (web areas). Web content counts: `inject` reliably pastes into browser inputs
-    /// via Cmd+V, so it must NOT be treated as "no target" and diverted to the
-    /// no-focus behavior. Only a genuinely absent focus (no frontmost app, or no
-    /// focused element at all - e.g. Spotlight, the desktop) returns false.
+    /// True if there is a frontmost app with a concrete focused text element that
+    /// `inject` can place text into - a native field, or a real text input nested in
+    /// web content (which `inject` pastes into via Cmd+V). A bare `AXWebArea`
+    /// *container* means the page has keyboard focus but no specific input is
+    /// selected (user clicked page chrome, not a field); that is NOT a real target,
+    /// so it - like a wholly absent focus (Spotlight, the desktop) - returns false
+    /// and is routed to the no-focus behavior (paste-and-keep with a notification).
     @MainActor
     static func hasInjectableTarget() -> Bool {
         guard let frontApp = NSWorkspace.shared.frontmostApplication else { return false }
-        return FocusedTextElementLocator.focusedElement(for: frontApp) != nil
+        guard let focused = FocusedTextElementLocator.focusedElement(for: frontApp) else { return false }
+        return focused.role != "AXWebArea"
     }
 
     /// Insert text into the focused text field of the frontmost app.

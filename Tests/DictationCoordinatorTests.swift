@@ -757,7 +757,8 @@ struct DictationCoordinatorTests {
 
         #expect(injectedTexts.isEmpty)
         #expect(pastedKeptTexts == ["transcribed text"])
-        #expect(overlay.shownInfos.isEmpty)
+        #expect(overlay.shownInfos == ["Copied to clipboard"])
+        #expect(overlay.state.phase == .info("Copied to clipboard"))
     }
 
     @Test @MainActor
