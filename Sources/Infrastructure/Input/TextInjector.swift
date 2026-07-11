@@ -42,16 +42,16 @@ enum TextInjector {
         case copiedToClipboard
     }
 
-    /// True if there is a frontmost app with a focused, non-web text element
-    /// that `inject` would write into directly (not via a clipboard fallback).
+    /// True if there is a frontmost app with a focused text element that `inject`
+    /// can place text into - whether it writes directly (native fields) or pastes
+    /// (web areas). Web content counts: `inject` reliably pastes into browser inputs
+    /// via Cmd+V, so it must NOT be treated as "no target" and diverted to the
+    /// no-focus behavior. Only a genuinely absent focus (no frontmost app, or no
+    /// focused element at all - e.g. Spotlight, the desktop) returns false.
     @MainActor
     static func hasInjectableTarget() -> Bool {
         guard let frontApp = NSWorkspace.shared.frontmostApplication else { return false }
-        guard let focused = FocusedTextElementLocator.focusedElement(for: frontApp) else { return false }
-        if focused.role == "AXWebArea" || FocusedTextElementLocator.isInsideWebArea(focused.element) {
-            return false
-        }
-        return true
+        return FocusedTextElementLocator.focusedElement(for: frontApp) != nil
     }
 
     /// Insert text into the focused text field of the frontmost app.
@@ -136,6 +136,18 @@ enum TextInjector {
         declareTransient(on: pasteboard)
         simulateCmdV()
         restorer.restore()
+    }
+
+    /// No-detectable-field "paste anyway" path for the `.clipboard` no-focus mode:
+    /// leave the dictation on the clipboard (persisting, unlike `pasteViaClipboard`
+    /// which restores the prior contents) then fire Cmd+V. Lands in targets that
+    /// have keyboard focus but expose no AX text element (Spotlight, some Electron);
+    /// if the blind paste goes nowhere the text stays on the clipboard for a manual
+    /// paste.
+    @MainActor
+    static func pasteKeepingClipboard(_ text: String, pasteboard: NSPasteboard = .general) {
+        copyToClipboard(text, pasteboard: pasteboard)
+        simulateCmdV()
     }
 
     /// Last-resort `.copiedToClipboard` path: no frontmost app to paste into, so
