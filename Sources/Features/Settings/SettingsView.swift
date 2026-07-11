@@ -17,8 +17,6 @@ struct SettingsView: View {
         .init(id: "openai_whisper-small.en", label: "small.en", memory: "~500 MB"),
         .init(id: "openai_whisper-medium.en", label: "medium.en", memory: "~1.5 GB"),
         .init(id: "distil-whisper_distil-large-v3_594MB", label: "distil-large-v3", memory: "~594 MB"),
-        .init(id: "openai_whisper-large-v3-v20240930_547MB", label: "large-v3-turbo", memory: "~547 MB"),
-        .init(id: "openai_whisper-large-v3_turbo_954MB", label: "large-v3-turbo (hi-q)", memory: "~954 MB"),
     ]
 
     init(engineRuntimeState: DictationRuntimeState) {
