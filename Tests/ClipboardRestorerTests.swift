@@ -50,6 +50,32 @@ struct ClipboardRestorerTests {
     }
 
     @Test @MainActor
+    func restoresWhenCountBumpedButOurTextStillOnTop() async {
+        // Browsers / clipboard managers bump changeCount while handling the paste even
+        // though the dictation is still on top - restore must still fire.
+        let pasteboard = NSPasteboard(name: .init("dikt.test.\(#function)"))
+        defer { pasteboard.releaseGlobally() }
+
+        pasteboard.clearContents()
+        pasteboard.setString("ORIG", forType: .string)
+
+        let restorer = ClipboardRestorer(pasteboard: pasteboard, writtenText: "DICT")
+
+        pasteboard.clearContents()
+        pasteboard.setString("DICT", forType: .string)
+
+        restorer.restore(after: .milliseconds(30))
+
+        // Same DICT re-written (bumps changeCount, top string unchanged).
+        pasteboard.clearContents()
+        pasteboard.setString("DICT", forType: .string)
+
+        try? await Task.sleep(for: .milliseconds(1500))
+
+        #expect(pasteboard.string(forType: .string) == "ORIG")
+    }
+
+    @Test @MainActor
     func emptySavedItemsClearsInsteadOfWriting() async {
         let pasteboard = NSPasteboard(name: .init("dikt.test.\(#function)"))
         defer { pasteboard.releaseGlobally() }

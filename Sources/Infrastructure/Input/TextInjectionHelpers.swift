@@ -12,9 +12,14 @@ enum TextInjectionStrategy: String {
 struct ClipboardRestorer {
     private let pasteboard: NSPasteboard
     private let savedItems: [NSPasteboardItem]
+    /// The dictation we placed on the pasteboard, so `restore` can tell "our write is
+    /// still on top" (safe to restore) from "a genuine new copy replaced it" (skip),
+    /// independently of `changeCount`.
+    private let writtenText: String?
 
-    init(pasteboard: NSPasteboard = .general) {
+    init(pasteboard: NSPasteboard = .general, writtenText: String? = nil) {
         self.pasteboard = pasteboard
+        self.writtenText = writtenText
         savedItems = (pasteboard.pasteboardItems ?? []).map { item -> NSPasteboardItem in
             let copy = NSPasteboardItem()
             for type in item.types {
@@ -33,16 +38,22 @@ struct ClipboardRestorer {
     /// Callers construct the restorer BEFORE overwriting the pasteboard with the
     /// dictation (to snapshot the prior contents), then call `restore()` AFTER the
     /// write - so `pasteboard.changeCount` here is the post-write count. If the
-    /// count differs when the delay elapses, our write is no longer on top (a
-    /// concurrent copy landed, or the user copied something else) and restoring
-    /// would clobber it, so we skip.
+    /// count differs when the delay elapses, restoring COULD clobber a concurrent
+    /// copy - but browsers and clipboard managers bump `changeCount` while handling
+    /// the paste even though our dictation is still on top, so a bare count check
+    /// falsely strands the dictation on the clipboard. When we know the text we
+    /// wrote, we treat "our write is still the top string" as safe to restore
+    /// regardless of the count; only a genuinely different top item (a real new
+    /// copy) is left untouched.
     func restore(after delay: Duration = .milliseconds(350)) {
         let savedItems = savedItems
         let pasteboard = pasteboard
+        let writtenText = writtenText
         let savedChangeCount = pasteboard.changeCount
         Task { @MainActor in
             try? await Task.sleep(for: delay)
-            guard pasteboard.changeCount == savedChangeCount else { return }
+            let stillOurs = writtenText != nil && pasteboard.string(forType: .string) == writtenText
+            guard pasteboard.changeCount == savedChangeCount || stillOurs else { return }
             pasteboard.clearContents()
             if !savedItems.isEmpty {
                 pasteboard.writeObjects(savedItems)
