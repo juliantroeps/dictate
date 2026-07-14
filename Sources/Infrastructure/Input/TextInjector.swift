@@ -131,7 +131,7 @@ enum TextInjector {
 
     @MainActor
     static func pasteViaClipboard(_ text: String, pasteboard: NSPasteboard = .general) {
-        let restorer = ClipboardRestorer(pasteboard: pasteboard)
+        let restorer = ClipboardRestorer(pasteboard: pasteboard, writtenText: text)
 
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
