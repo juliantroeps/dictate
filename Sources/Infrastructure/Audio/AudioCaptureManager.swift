@@ -307,7 +307,7 @@ final class AudioCaptureManager {
         // filter-delay latency + final partial frame are not dropped.
         let tail: [Float] = converterLock.withLock {
             guard let converter else { return [] }
-            return AudioCaptureManager.drainConverterTail(converter)
+            return AudioCaptureManager.boundedDrainConverterTail(converter)
         }
         captured.append(contentsOf: tail)
 
@@ -334,6 +334,18 @@ final class AudioCaptureManager {
     // (filter group-delay latency + last partial frame) held in the converter.
     // nonisolated so stopRecording and handleConfigChange can call it from lock closures.
     nonisolated static func drainConverterTail(_ converter: AVAudioConverter) -> [Float] {
+        // Guard against degenerate formats: a converter with zero/negative sampleRate or
+        // channelCount can make the Apple resampler spin indefinitely inside convert(),
+        // hanging the main thread (issue #22). Mirrors the sampleRate guard in
+        // outputFrameCount (line 195) and the hwFormat check in startRecording (lines 98-101).
+        let inFmt = converter.inputFormat
+        let outFmt = converter.outputFormat
+        guard inFmt.sampleRate > 0, inFmt.channelCount > 0,
+              outFmt.sampleRate > 0, outFmt.channelCount > 0 else {
+            AppLogger.audio.info("Skipping converter flush degenerate format")
+            return []
+        }
+
         // Tail is bounded (filter delay); a few hundred frames at 16kHz is ample.
         guard
             let outputBuffer = AVAudioPCMBuffer(
@@ -353,6 +365,37 @@ final class AudioCaptureManager {
         }
         guard let floatData = outputBuffer.floatChannelData?[0] else { return [] }
         return Array(UnsafeBufferPointer(start: floatData, count: Int(outputBuffer.frameLength)))
+    }
+
+    // Bound the drain so an Apple resampler spin (issue #22) cannot freeze the main
+    // thread. drainConverterTail runs a synchronous Apple convert() that Task.cancel
+    // cannot interrupt, so we run it on a throwaway thread and abandon it on timeout.
+    // The happy-path drain completes in microseconds; the 1s bound is never hit normally.
+    // `work` is injectable so tests can exercise the timeout without audio hardware.
+    nonisolated static func boundedDrainConverterTail(
+        _ converter: AVAudioConverter,
+        timeout: TimeInterval = 1.0
+    ) -> [Float] {
+        boundedDrain(timeout: timeout) { drainConverterTail(converter) }
+    }
+
+    nonisolated static func boundedDrain(
+        timeout: TimeInterval,
+        work: @escaping @Sendable () -> [Float]
+    ) -> [Float] {
+        final class ResultBox: @unchecked Sendable { var value: [Float] = [] }
+        let box = ResultBox()
+        let semaphore = DispatchSemaphore(value: 0)
+        let thread = Thread {
+            box.value = work()
+            semaphore.signal()
+        }
+        thread.start()
+        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+            AppLogger.audio.error("Converter flush timed out; abandoning drain thread (issue #22)")
+            return []
+        }
+        return box.value
     }
 
     // Runs on the audio tap thread - must be nonisolated.
@@ -464,7 +507,7 @@ final class AudioCaptureManager {
             // filter-delay latency + final partial frame are not dropped.
             let tail: [Float] = converterLock.withLock {
                 guard let converter else { return [] }
-                return AudioCaptureManager.drainConverterTail(converter)
+                return AudioCaptureManager.boundedDrainConverterTail(converter)
             }
             capturedSamples?.append(contentsOf: tail)
         }
