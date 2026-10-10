@@ -21,8 +21,6 @@ final class PasteReceipt: NSObject, NSPasteboardItemDataProvider, @unchecked Sen
     private let lock = NSLock()
     private var outcome = Outcome.pending
     private var waiter: CheckedContinuation<Bool, Never>?
-    /// Retained so the written item (and with it the promise) stays valid while outstanding.
-    private var item: NSPasteboardItem?
 
     init(text: String) {
         self.text = text
@@ -49,14 +47,14 @@ final class PasteReceipt: NSObject, NSPasteboardItemDataProvider, @unchecked Sen
     }
 
     /// One item: `.string` lazy (this object), markers eager. Returns the pasteboard
-    /// `changeCount` after the write.
+    /// `changeCount` after the write. The pasteboard retains the item (and this
+    /// provider) while the promise is on the board.
     @MainActor
     func write(to pasteboard: NSPasteboard) -> Int {
         let item = NSPasteboardItem()
         item.setDataProvider(self, forTypes: [.string])
         item.setData(Data(), forType: TextInjector.transientType)
         item.setData(Data(), forType: TextInjector.concealedType)
-        lock.withLock { self.item = item }
 
         pasteboard.clearContents()
         if !pasteboard.writeObjects([item]) {

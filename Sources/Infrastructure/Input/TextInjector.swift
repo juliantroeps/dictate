@@ -106,12 +106,8 @@ enum TextInjector {
         var fields = "gate app=\(frontApp.bundleIdentifier ?? "-") pid=\(frontApp.processIdentifier)"
         fields += " focusErr=\(probe.error.rawValue) role=\(probe.role ?? "-")"
         fields += " settable=\(probe.element == nil ? "-" : String(probe.valueSettable))"
-        switch assessment {
-        case .target:
-            if let element = probe.element {
-                fields += " insideWeb=\(FocusedTextElementLocator.isInsideWebArea(element))"
-            }
-        case .noTarget:
+        // Target path: `route` walks for a web ancestor itself and logs it, no need to here.
+        if case .noTarget = assessment {
             fields += " \(FocusedTextElementLocator.diagnosticContext(for: frontApp))"
         }
         AppLogger.input.debug("\(fields) \(logSummary(for: assessment))")
@@ -277,10 +273,8 @@ enum TextInjector {
             // `hasBeenRead` rather than the wait result: a read can land between the
             // timeout resolving the wait and this task resuming.
             if let readAt = receipt.readInstant {
-                let latency = (readAt - started).components
-                let ms = latency.seconds * 1000 + latency.attoseconds / 1_000_000_000_000_000
                 let delta = pasteboard.changeCount - writeCount
-                AppLogger.input.info("Paste receipt after \(ms) ms, changeCount +\(delta)")
+                AppLogger.input.info("Paste receipt after \(readAt - started), changeCount +\(delta)")
                 restorer.restore(after: grace)
                 return true
             }
