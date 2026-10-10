@@ -130,9 +130,14 @@ enum TextInjector {
     /// *container* means the page has keyboard focus but no specific input is
     /// selected (user clicked page chrome, not a field); that is NOT a real target,
     /// so it - like a wholly absent focus (Spotlight, the desktop) - returns false
-    /// and is routed to the no-focus behavior (paste-and-keep with a notification).
+    /// and is routed to the no-focus behavior (receipt paste: restore if a consumer
+    /// read it, otherwise keep on the clipboard with a notification).
+    ///
+    /// Settles an older outstanding receipt first: the AX probe below would otherwise
+    /// talk to an app that may be about to read that promise.
     @MainActor
     static func hasInjectableTarget() -> Bool {
+        settleOutstanding()
         if case .target = assessTarget() { return true }
         return false
     }
@@ -201,8 +206,8 @@ enum TextInjector {
     /// Marks the pasteboard entry as transient/concealed (`org.nspasteboard.*`) so
     /// clipboard managers (Raycast/Alfred/Maccy/Paste) skip recording it - dictations
     /// shouldn't linger in clipboard-manager history.
-    private static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
-    private static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+    static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+    static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
 
     @MainActor
     private static func declareTransient(on pasteboard: NSPasteboard) {
@@ -221,16 +226,113 @@ enum TextInjector {
         restorer.restore()
     }
 
-    /// No-detectable-field "paste anyway" path for the `.clipboard` no-focus mode:
-    /// leave the dictation on the clipboard (persisting, unlike `pasteViaClipboard`
-    /// which restores the prior contents) then fire Cmd+V. Lands in targets that
-    /// have keyboard focus but expose no AX text element (Spotlight, some Electron);
-    /// if the blind paste goes nowhere the text stays on the clipboard for a manual
-    /// paste.
+    /// A receipt paste in flight on one pasteboard, until its settle task finishes.
+    private struct OutstandingPaste {
+        let receipt: PasteReceipt
+        let text: String
+        let writeCount: Int
+    }
+
+    /// One live receipt per pasteboard (keyed by name), settled by the next delivery.
     @MainActor
-    static func pasteKeepingClipboard(_ text: String, pasteboard: NSPasteboard = .general) {
-        copyToClipboard(text, pasteboard: pasteboard)
-        simulateCmdV()
+    private static var outstanding: [String: OutstandingPaste] = [:]
+
+    @MainActor
+    static func hasOutstandingReceipt(on pasteboard: NSPasteboard = .general) -> Bool {
+        outstanding[pasteboard.name.rawValue] != nil
+    }
+
+    /// Writes `text` as a lazy pasteboard promise, posts Cmd+V and settles on what a
+    /// consumer does with it, in a task of its own (it outlives a cancelled caller):
+    /// - read: restore the prior clipboard after `grace`, result true (consumed)
+    /// - no read within `timeout`, board untouched: keep the dictation as a plain
+    ///   string, result false (nothing took the paste, caller shows the pill)
+    /// - no read, board changed by someone else: leave it alone, result true
+    /// - superseded by the next delivery (`settleOutstanding`): result false
+    ///
+    /// Blind paste for the no-field case: lands in targets that have keyboard focus but
+    /// expose no AX text element (Spotlight-like panels, cold web trees).
+    @MainActor
+    @discardableResult
+    static func startReceiptPaste(
+        _ text: String,
+        pasteboard: NSPasteboard = .general,
+        sendPaste: @MainActor () -> Void = simulateCmdV,
+        grace: Duration = .milliseconds(150),
+        timeout: Duration = .milliseconds(1500)
+    ) -> Task<Bool, Never> {
+        // Before the snapshot: reading `.string` of an older promise would fire its provider.
+        settleOutstanding(on: pasteboard)
+
+        let restorer = ClipboardRestorer(pasteboard: pasteboard, writtenText: text)
+        let receipt = PasteReceipt(text: text)
+        let writeCount = receipt.write(to: pasteboard)
+        let key = pasteboard.name.rawValue
+        outstanding[key] = OutstandingPaste(receipt: receipt, text: text, writeCount: writeCount)
+
+        let started = ContinuousClock.now
+        sendPaste()
+
+        return Task { @MainActor in
+            _ = await receipt.waitForRead(timeout: timeout)
+            defer {
+                if outstanding[key]?.receipt === receipt { outstanding[key] = nil }
+            }
+
+            // Superseded: `settleOutstanding` already rewrote (or left) the board.
+            if receipt.isAbandoned { return false }
+
+            // `hasBeenRead` rather than the wait result: a read can land between the
+            // timeout resolving the wait and this task resuming.
+            if let readAt = receipt.readInstant {
+                let latency = (readAt - started).components
+                let ms = latency.seconds * 1000 + latency.attoseconds / 1_000_000_000_000_000
+                let delta = pasteboard.changeCount - writeCount
+                AppLogger.input.info("Paste receipt after \(ms) ms, changeCount +\(delta)")
+                restorer.restore(after: grace)
+                return true
+            }
+
+            if pasteboard.changeCount == writeCount {
+                copyToClipboard(text, pasteboard: pasteboard)
+                AppLogger.input.info("No paste receipt, kept dictation on clipboard")
+                return false
+            }
+            AppLogger.input.info("No paste receipt, clipboard moved on")
+            return true
+        }
+    }
+
+    @MainActor
+    static func pasteWithReceipt(
+        _ text: String,
+        pasteboard: NSPasteboard = .general,
+        sendPaste: @MainActor () -> Void = simulateCmdV,
+        grace: Duration = .milliseconds(150),
+        timeout: Duration = .milliseconds(1500)
+    ) async -> Bool {
+        await startReceiptPaste(
+            text, pasteboard: pasteboard, sendPaste: sendPaste, grace: grace, timeout: timeout
+        ).value
+    }
+
+    /// Applies the timeout rule to the outstanding receipt on `pasteboard` now: no read
+    /// and board untouched -> keep the dictation as a plain string (drops the promise),
+    /// wait resolved as not consumed. A latched read is left to its settle task (the
+    /// restore is owed there). No-op when nothing is outstanding on that board.
+    @MainActor
+    static func settleOutstanding(on pasteboard: NSPasteboard = .general) {
+        guard let pending = outstanding[pasteboard.name.rawValue],
+            !pending.receipt.hasBeenRead, !pending.receipt.isAbandoned
+        else { return }
+
+        pending.receipt.abandon()
+        if pasteboard.changeCount == pending.writeCount {
+            copyToClipboard(pending.text, pasteboard: pasteboard)
+            AppLogger.input.info("Paste receipt superseded by next delivery, kept dictation on clipboard")
+        } else {
+            AppLogger.input.info("Paste receipt superseded by next delivery, clipboard moved on")
+        }
     }
 
     /// Last-resort `.copiedToClipboard` path: no frontmost app to paste into, so
@@ -244,7 +346,7 @@ enum TextInjector {
         declareTransient(on: pasteboard)
     }
 
-    private static func simulateCmdV() {
+    static func simulateCmdV() {
         let source = CGEventSource(stateID: .hidSystemState)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)
         keyDown?.flags = .maskCommand
