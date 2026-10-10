@@ -36,24 +36,32 @@ struct ClipboardRestorer {
     }
 
     /// Callers construct the restorer BEFORE overwriting the pasteboard with the
-    /// dictation (to snapshot the prior contents), then call `restore()` AFTER the
-    /// write - so `pasteboard.changeCount` here is the post-write count. If the
-    /// count differs when the delay elapses, restoring COULD clobber a concurrent
-    /// copy - but browsers and clipboard managers bump `changeCount` while handling
-    /// the paste even though our dictation is still on top, so a bare count check
-    /// falsely strands the dictation on the clipboard. When we know the text we
-    /// wrote, we treat "our write is still the top string" as safe to restore
-    /// regardless of the count; only a genuinely different top item (a real new
-    /// copy) is left untouched.
-    func restore(after delay: Duration = .milliseconds(350)) {
+    /// dictation (to snapshot the prior contents), then call `restore(after:)` once
+    /// the paste is done (receipt time) - so `pasteboard.changeCount` here is the
+    /// count at that call. If the count differs when the delay elapses, restoring
+    /// COULD clobber a concurrent copy - but browsers and clipboard managers bump
+    /// `changeCount` while handling the paste even though our dictation is still on
+    /// top, so a bare count check falsely strands the dictation on the clipboard.
+    /// When we know the text we wrote, we treat "our write is still the top string"
+    /// as safe to restore regardless of the count; only a genuinely different top
+    /// item (a real new copy) is left untouched.
+    ///
+    /// Reading `.string` fires a lazy provider, so it comes last: a later dictation's
+    /// receipt promise may be on the board by now (the grace window is open for the
+    /// next dictation), and a read here would fake its receipt. A live receipt on this
+    /// pasteboard means that later delivery owns the board: leave it alone, unread.
+    /// Otherwise the count is checked first and the string only read when it moved.
+    func restore(after delay: Duration) {
         let savedItems = savedItems
         let pasteboard = pasteboard
         let writtenText = writtenText
         let savedChangeCount = pasteboard.changeCount
         Task { @MainActor in
             try? await Task.sleep(for: delay)
-            let stillOurs = writtenText != nil && pasteboard.string(forType: .string) == writtenText
-            guard pasteboard.changeCount == savedChangeCount || stillOurs else { return }
+            guard !TextInjector.hasOutstandingReceipt(on: pasteboard) else { return }
+            if pasteboard.changeCount != savedChangeCount {
+                guard let writtenText, pasteboard.string(forType: .string) == writtenText else { return }
+            }
             pasteboard.clearContents()
             if !savedItems.isEmpty {
                 pasteboard.writeObjects(savedItems)

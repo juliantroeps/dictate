@@ -29,7 +29,8 @@ protocol AXPort {
     func readRange(_ handle: AXElementHandle) -> CFRange?
     func writeSelectedText(_ handle: AXElementHandle, _ text: String) -> Bool
     func writeValueSplice(_ handle: AXElementHandle, _ text: String) -> Bool
-    /// Clipboard paste WITH restore of prior clipboard contents.
+    /// Clipboard paste: restores the prior clipboard on receipt, keeps the dictation
+    /// as a plain string when nothing read it. Returns right after Cmd+V.
     func paste(_ text: String)
     /// Leaves `text` on the clipboard, no restore.
     func copyOnly(_ text: String)
@@ -215,17 +216,6 @@ enum TextInjector {
         pasteboard.setData(Data(), forType: concealedType)
     }
 
-    @MainActor
-    static func pasteViaClipboard(_ text: String, pasteboard: NSPasteboard = .general) {
-        let restorer = ClipboardRestorer(pasteboard: pasteboard, writtenText: text)
-
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-        declareTransient(on: pasteboard)
-        simulateCmdV()
-        restorer.restore()
-    }
-
     /// A receipt paste in flight on one pasteboard, until its settle task finishes.
     private struct OutstandingPaste {
         let receipt: PasteReceipt
@@ -250,8 +240,10 @@ enum TextInjector {
     /// - no read, board changed by someone else: leave it alone, result true
     /// - superseded by the next delivery (`settleOutstanding`): result false
     ///
-    /// Blind paste for the no-field case: lands in targets that have keyboard focus but
-    /// expose no AX text element (Spotlight-like panels, cold web trees).
+    /// The one clipboard paste: the no-target branch awaits the result, the `route`
+    /// legs (`SystemAXPort.paste`) let the task settle in the background. Also lands in
+    /// targets that have keyboard focus but expose no AX text element (Spotlight-like
+    /// panels, cold web trees).
     @MainActor
     @discardableResult
     static func startReceiptPaste(
@@ -337,8 +329,8 @@ enum TextInjector {
 
     /// Last-resort `.copiedToClipboard` path: no frontmost app to paste into, so
     /// leave the dictation on the clipboard for the user to paste manually.
-    /// Intentionally does NOT save/restore prior contents (unlike pasteViaClipboard) -
-    /// the dictation must remain on the pasteboard after this returns.
+    /// Intentionally does NOT save/restore prior contents - the dictation must remain
+    /// on the pasteboard after this returns.
     @MainActor
     static func copyToClipboard(_ text: String, pasteboard: NSPasteboard = .general) {
         pasteboard.clearContents()
@@ -395,7 +387,8 @@ struct SystemAXPort: AXPort {
     }
 
     func paste(_ text: String) {
-        TextInjector.pasteViaClipboard(text)
+        // Not awaited: `route` stays synchronous, the settle task finishes in the background.
+        TextInjector.startReceiptPaste(text)
     }
 
     func copyOnly(_ text: String) {
