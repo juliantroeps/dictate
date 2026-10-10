@@ -42,6 +42,88 @@ enum TextInjector {
         case copiedToClipboard
     }
 
+    /// Why `assessTarget` found nothing to inject into.
+    enum NoTargetReason: Equatable, CustomStringConvertible {
+        case noFrontmostApp
+        /// Focus query failed (e.g. -25212 `kAXErrorNoValue` while a web tree is cold),
+        /// or succeeded with no element (raw 0).
+        case axError(Int32)
+        case nonText(role: String)
+        /// Bare `AXWebArea`: page has focus but no specific input.
+        case webContainer
+
+        var description: String {
+            switch self {
+            case .noFrontmostApp: "noFrontmostApp"
+            case .axError(let code): "axError(\(code))"
+            case .nonText(let role): "nonText(\(role))"
+            case .webContainer: "webContainer"
+            }
+        }
+    }
+
+    enum TargetAssessment: Equatable {
+        case target(role: String)
+        case noTarget(NoTargetReason)
+    }
+
+    /// Pure verdict over the facts of one focus query (see `FocusProbe`).
+    /// `role` is nil when the query produced no element.
+    static func classify(
+        appPresent: Bool,
+        focusError: AXError,
+        role: String?,
+        valueSettable: Bool
+    ) -> TargetAssessment {
+        guard appPresent else { return .noTarget(.noFrontmostApp) }
+        guard focusError == .success, let role else { return .noTarget(.axError(focusError.rawValue)) }
+        if role == "AXWebArea" { return .noTarget(.webContainer) }
+        guard FocusedTextElementLocator.acceptsText(role: role, valueSettable: valueSettable) else {
+            return .noTarget(.nonText(role: role))
+        }
+        return .target(role: role)
+    }
+
+    /// Reads the frontmost app's focus state, classifies it and logs the decision
+    /// (`.debug`: stderr + os_log, never a Sentry breadcrumb) so "which apps hit the
+    /// no-target path and why" is answerable from the log.
+    @MainActor
+    static func assessTarget() -> TargetAssessment {
+        guard let frontApp = NSWorkspace.shared.frontmostApplication else {
+            let assessment = classify(appPresent: false, focusError: .success, role: nil, valueSettable: false)
+            AppLogger.input.debug("gate app=- \(logSummary(for: assessment))")
+            return assessment
+        }
+        let probe = FocusedTextElementLocator.probe(for: frontApp)
+        let assessment = classify(
+            appPresent: true,
+            focusError: probe.error,
+            role: probe.role,
+            valueSettable: probe.valueSettable
+        )
+
+        var fields = "gate app=\(frontApp.bundleIdentifier ?? "-") pid=\(frontApp.processIdentifier)"
+        fields += " focusErr=\(probe.error.rawValue) role=\(probe.role ?? "-")"
+        fields += " settable=\(probe.element == nil ? "-" : String(probe.valueSettable))"
+        switch assessment {
+        case .target:
+            if let element = probe.element {
+                fields += " insideWeb=\(FocusedTextElementLocator.isInsideWebArea(element))"
+            }
+        case .noTarget:
+            fields += " \(FocusedTextElementLocator.diagnosticContext(for: frontApp))"
+        }
+        AppLogger.input.debug("\(fields) \(logSummary(for: assessment))")
+        return assessment
+    }
+
+    private static func logSummary(for assessment: TargetAssessment) -> String {
+        switch assessment {
+        case .target: "-> target"
+        case .noTarget(let reason): "-> noTarget(\(reason))"
+        }
+    }
+
     /// True if there is a frontmost app with a concrete focused text element that
     /// `inject` can place text into - a native field, or a real text input nested in
     /// web content (which `inject` pastes into via Cmd+V). A bare `AXWebArea`
@@ -51,9 +133,8 @@ enum TextInjector {
     /// and is routed to the no-focus behavior (paste-and-keep with a notification).
     @MainActor
     static func hasInjectableTarget() -> Bool {
-        guard let frontApp = NSWorkspace.shared.frontmostApplication else { return false }
-        guard let focused = FocusedTextElementLocator.focusedElement(for: frontApp) else { return false }
-        return focused.role != "AXWebArea"
+        if case .target = assessTarget() { return true }
+        return false
     }
 
     /// Insert text into the focused text field of the frontmost app.
