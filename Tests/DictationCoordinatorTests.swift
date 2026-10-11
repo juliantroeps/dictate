@@ -721,7 +721,7 @@ struct DictationCoordinatorTests {
     }
 
     @Test @MainActor
-    func clipboardModeWithNoTarget_pastesKeepingClipboard() async {
+    func clipboardModeWithNoTarget_notConsumed_showsPill() async {
         let settings = FakeDictationSettings()
         settings.minHoldDuration = 0.1
         settings.muteSystemAudio = false
@@ -746,7 +746,10 @@ struct DictationCoordinatorTests {
                 return .injected
             },
             hasInjectableTarget: { false },
-            pasteKeepingClipboard: { text in pastedKeptTexts.append(text) }
+            pasteWithReceipt: { text in
+                pastedKeptTexts.append(text)
+                return false
+            }
         )
 
         coordinator.handleKeyDown()
@@ -759,6 +762,101 @@ struct DictationCoordinatorTests {
         #expect(pastedKeptTexts == ["transcribed text"])
         #expect(overlay.shownInfos == ["Copied to clipboard"])
         #expect(overlay.state.phase == .info("Copied to clipboard"))
+    }
+
+    @Test @MainActor
+    func clipboardModeWithNoTarget_consumed_hidesWithoutPill() async {
+        let settings = FakeDictationSettings()
+        settings.minHoldDuration = 0.1
+        settings.muteSystemAudio = false
+        settings.noFocusBehavior = .clipboard
+
+        var currentTime: UInt64 = 1_000_000_000
+        let audioCapture = FakeAudioCaptureManager()
+        let overlay = FakeOverlayController()
+        let engine = FakeTranscriptionEngineCoordinator()
+        engine.isReady = true
+        var injectedTexts: [String] = []
+        var pastedTexts: [String] = []
+
+        let coordinator = DictationCoordinator(
+            audioCapture: audioCapture,
+            overlay: overlay,
+            engineCoordinator: engine,
+            settings: settings,
+            now: { DispatchTime(uptimeNanoseconds: currentTime) },
+            injectText: { text in
+                injectedTexts.append(text)
+                return .injected
+            },
+            hasInjectableTarget: { false },
+            pasteWithReceipt: { text in
+                pastedTexts.append(text)
+                return true
+            }
+        )
+
+        coordinator.handleKeyDown()
+        currentTime += 500_000_000
+        coordinator.handleKeyUp()
+
+        await coordinator.runtimeState.transcriptionTask?.value
+
+        #expect(injectedTexts.isEmpty)
+        #expect(pastedTexts == ["transcribed text"])
+        #expect(overlay.shownInfos.isEmpty)
+        #expect(overlay.hideCount == 1)
+        #expect(overlay.state.phase == .idle)
+    }
+
+    @Test @MainActor
+    func clipboardModeWithNoTarget_supersededWhileWaiting_leavesOverlayAlone() async {
+        let settings = FakeDictationSettings()
+        settings.minHoldDuration = 0.1
+        settings.muteSystemAudio = false
+        settings.noFocusBehavior = .clipboard
+
+        var currentTime: UInt64 = 1_000_000_000
+        let audioCapture = FakeAudioCaptureManager()
+        let overlay = FakeOverlayController()
+        let engine = FakeTranscriptionEngineCoordinator()
+        engine.isReady = true
+        // The fake paste suspends until the test resumes it, like a receipt wait.
+        var receiptWait: CheckedContinuation<Bool, Never>?
+
+        let coordinator = DictationCoordinator(
+            audioCapture: audioCapture,
+            overlay: overlay,
+            engineCoordinator: engine,
+            settings: settings,
+            now: { DispatchTime(uptimeNanoseconds: currentTime) },
+            injectText: { _ in .injected },
+            hasInjectableTarget: { false },
+            pasteWithReceipt: { _ in
+                await withCheckedContinuation { receiptWait = $0 }
+            }
+        )
+
+        coordinator.handleKeyDown()
+        currentTime += 500_000_000
+        coordinator.handleKeyUp()
+
+        // handleKeyDown nils the handle; this is the one startTranscription stored.
+        let task = coordinator.runtimeState.transcriptionTask
+        // Bump only once the closure is suspended, or the stale guard before the
+        // delivery branch would return first and the test would prove nothing.
+        for _ in 0..<400 where receiptWait == nil {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(receiptWait != nil)
+
+        coordinator.runtimeState.transcriptionGeneration += 1
+        receiptWait?.resume(returning: false)
+        await task?.value
+
+        #expect(overlay.shownInfos.isEmpty)
+        #expect(overlay.hideCount == 0)
+        #expect(overlay.state.phase == .processing)
     }
 
     @Test @MainActor
@@ -787,7 +885,10 @@ struct DictationCoordinatorTests {
                 return .injected
             },
             hasInjectableTarget: { true },
-            pasteKeepingClipboard: { text in pastedKeptTexts.append(text) }
+            pasteWithReceipt: { text in
+                pastedKeptTexts.append(text)
+                return true
+            }
         )
 
         coordinator.handleKeyDown()

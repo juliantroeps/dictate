@@ -69,7 +69,8 @@ final class DictationCoordinator {
     private let transcriptionTimeout: Duration
     private let injectText: @MainActor (String) -> TextInjector.Result
     private let hasInjectableTarget: @MainActor () -> Bool
-    private let pasteKeepingClipboard: @MainActor (String) -> Void
+    /// Pastes with a pasteboard receipt; true when the paste was consumed (no pill needed).
+    private let pasteWithReceipt: @MainActor (String) async -> Bool
     private let muteController: MuteController
     let runtimeState: DictationRuntimeState
 
@@ -87,7 +88,7 @@ final class DictationCoordinator {
         transcriptionTimeout: Duration = .seconds(30),
         injectText: @escaping @MainActor (String) -> TextInjector.Result = TextInjector.inject,
         hasInjectableTarget: @escaping @MainActor () -> Bool = TextInjector.hasInjectableTarget,
-        pasteKeepingClipboard: @escaping @MainActor (String) -> Void = { TextInjector.pasteKeepingClipboard($0) },
+        pasteWithReceipt: @escaping @MainActor (String) async -> Bool = { await TextInjector.pasteWithReceipt($0) },
         muteController: MuteController = .system
     ) {
         self.audioCapture = audioCapture
@@ -99,7 +100,7 @@ final class DictationCoordinator {
         self.transcriptionTimeout = transcriptionTimeout
         self.injectText = injectText
         self.hasInjectableTarget = hasInjectableTarget
-        self.pasteKeepingClipboard = pasteKeepingClipboard
+        self.pasteWithReceipt = pasteWithReceipt
         self.muteController = muteController
 
         self.engineCoordinator.onReady = { [weak self] in self?.flushPendingSamples() }
@@ -366,7 +367,7 @@ final class DictationCoordinator {
         let overlay = self.overlay
         let injectText = self.injectText
         let hasInjectableTarget = self.hasInjectableTarget
-        let pasteKeepingClipboard = self.pasteKeepingClipboard
+        let pasteWithReceipt = self.pasteWithReceipt
         let runtimeState = self.runtimeState
         let transcriptionTimeout = self.transcriptionTimeout
 
@@ -399,10 +400,16 @@ final class DictationCoordinator {
                         overlay.hide()
                         return
                     case .clipboard:
-                        AppLogger.input.info(
-                            "No text field and clipboard mode - pasting, leaving dictation on clipboard")
-                        pasteKeepingClipboard(text)
-                        overlay.showInfo("Copied to clipboard", duration: 2.0)
+                        AppLogger.input.info("No text field and clipboard mode - pasting, waiting for receipt")
+                        let consumed = await pasteWithReceipt(text)
+                        // The paste is settled either way; only the overlay is gated, so a
+                        // newer session keeps its own overlay state.
+                        guard runtimeState.transcriptionGeneration == generation else { return }
+                        if consumed {
+                            overlay.hide()
+                        } else {
+                            overlay.showInfo("Copied to clipboard", duration: 2.0)
+                        }
                         return
                     }
                 }

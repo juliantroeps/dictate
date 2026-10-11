@@ -36,24 +36,32 @@ struct ClipboardRestorer {
     }
 
     /// Callers construct the restorer BEFORE overwriting the pasteboard with the
-    /// dictation (to snapshot the prior contents), then call `restore()` AFTER the
-    /// write - so `pasteboard.changeCount` here is the post-write count. If the
-    /// count differs when the delay elapses, restoring COULD clobber a concurrent
-    /// copy - but browsers and clipboard managers bump `changeCount` while handling
-    /// the paste even though our dictation is still on top, so a bare count check
-    /// falsely strands the dictation on the clipboard. When we know the text we
-    /// wrote, we treat "our write is still the top string" as safe to restore
-    /// regardless of the count; only a genuinely different top item (a real new
-    /// copy) is left untouched.
-    func restore(after delay: Duration = .milliseconds(350)) {
+    /// dictation (to snapshot the prior contents), then call `restore(after:)` once
+    /// the paste is done (receipt time) - so `pasteboard.changeCount` here is the
+    /// count at that call. If the count differs when the delay elapses, restoring
+    /// COULD clobber a concurrent copy - but browsers and clipboard managers bump
+    /// `changeCount` while handling the paste even though our dictation is still on
+    /// top, so a bare count check falsely strands the dictation on the clipboard.
+    /// When we know the text we wrote, we treat "our write is still the top string"
+    /// as safe to restore regardless of the count; only a genuinely different top
+    /// item (a real new copy) is left untouched.
+    ///
+    /// Reading `.string` fires a lazy provider, so it comes last: a later dictation's
+    /// receipt promise may be on the board by now (the grace window is open for the
+    /// next dictation), and a read here would fake its receipt. A live receipt on this
+    /// pasteboard means that later delivery owns the board: leave it alone, unread.
+    /// Otherwise the count is checked first and the string only read when it moved.
+    func restore(after delay: Duration) {
         let savedItems = savedItems
         let pasteboard = pasteboard
         let writtenText = writtenText
         let savedChangeCount = pasteboard.changeCount
         Task { @MainActor in
             try? await Task.sleep(for: delay)
-            let stillOurs = writtenText != nil && pasteboard.string(forType: .string) == writtenText
-            guard pasteboard.changeCount == savedChangeCount || stillOurs else { return }
+            guard !TextInjector.hasOutstandingReceipt(on: pasteboard) else { return }
+            if pasteboard.changeCount != savedChangeCount {
+                guard let writtenText, pasteboard.string(forType: .string) == writtenText else { return }
+            }
             pasteboard.clearContents()
             if !savedItems.isEmpty {
                 pasteboard.writeObjects(savedItems)
@@ -67,8 +75,30 @@ struct FocusedTextElement {
     let role: String
 }
 
+/// Raw facts from one focus query on an app element. Kept separate from the verdict
+/// (`TextInjector.classify`) so a "no target" decision can be explained in the log.
+struct FocusProbe {
+    /// Result of the `kAXFocusedUIElementAttribute` query itself.
+    let error: AXError
+    /// nil when the query failed or returned nothing.
+    let element: AXUIElement?
+    /// nil when there is no element; "unknown" when the element's role can't be read.
+    let role: String?
+    let valueSettable: Bool
+}
+
 enum FocusedTextElementLocator {
-    static func focusedElement(for frontApp: NSRunningApplication) -> FocusedTextElement? {
+    private static let textRoles: Set<String> = [
+        kAXTextFieldRole as String, kAXTextAreaRole as String, kAXComboBoxRole as String,
+        "AXSearchField", "AXWebArea",
+    ]
+
+    /// Single source of truth for "this focused element can take text".
+    static func acceptsText(role: String, valueSettable: Bool) -> Bool {
+        textRoles.contains(role) || valueSettable
+    }
+
+    static func probe(for frontApp: NSRunningApplication) -> FocusProbe {
         let appRef = AXUIElementCreateApplication(frontApp.processIdentifier)
 
         var focusedValue: CFTypeRef?
@@ -78,30 +108,60 @@ enum FocusedTextElementLocator {
             &focusedValue
         )
         guard result == .success, let element = focusedValue else {
-            return nil
+            return FocusProbe(error: result, element: nil, role: nil, valueSettable: false)
         }
 
         let axElement = element as! AXUIElement
 
         var roleValue: CFTypeRef?
         AXUIElementCopyAttributeValue(axElement, kAXRoleAttribute as CFString, &roleValue)
-        let role = (roleValue as? String) ?? "unknown"
-
-        let textRoles: Set<String> = [
-            kAXTextFieldRole as String, kAXTextAreaRole as String, kAXComboBoxRole as String,
-            "AXSearchField", "AXWebArea",
-        ]
-        if textRoles.contains(role) {
-            return FocusedTextElement(element: axElement, role: role)
-        }
 
         var isSettable: DarwinBoolean = false
         AXUIElementIsAttributeSettable(axElement, kAXValueAttribute as CFString, &isSettable)
-        if isSettable.boolValue {
-            return FocusedTextElement(element: axElement, role: role)
-        }
 
-        return nil
+        return FocusProbe(
+            error: result,
+            element: axElement,
+            role: (roleValue as? String) ?? "unknown",
+            valueSettable: isSettable.boolValue
+        )
+    }
+
+    static func focusedElement(for frontApp: NSRunningApplication) -> FocusedTextElement? {
+        let probe = probe(for: frontApp)
+        guard let element = probe.element, let role = probe.role,
+            acceptsText(role: role, valueSettable: probe.valueSettable)
+        else { return nil }
+        return FocusedTextElement(element: element, role: role)
+    }
+
+    /// Diagnostic only (never changes a decision): extra focus-path facts logged next to
+    /// a no-target verdict. Both are focus queries, not role reads on the app element,
+    /// so they don't wake a cold web tree. `win` is the app's focused-window query
+    /// (Chromium/Electron name the window even while the focused element is missing);
+    /// `sys` is the system-wide focused element with its owning pid (frontmost-app
+    /// attribution, e.g. Spotlight).
+    static func diagnosticContext(for frontApp: NSRunningApplication) -> String {
+        let appRef = AXUIElementCreateApplication(frontApp.processIdentifier)
+        var windowValue: CFTypeRef?
+        let windowError = AXUIElementCopyAttributeValue(
+            appRef, kAXFocusedWindowAttribute as CFString, &windowValue)
+
+        let systemWide = AXUIElementCreateSystemWide()
+        var sysValue: CFTypeRef?
+        let sysError = AXUIElementCopyAttributeValue(
+            systemWide, kAXFocusedUIElementAttribute as CFString, &sysValue)
+        var sysRole = "-"
+        var sysPid = "-"
+        if sysError == .success, let sysValue {
+            let sysElement = sysValue as! AXUIElement
+            var roleValue: CFTypeRef?
+            AXUIElementCopyAttributeValue(sysElement, kAXRoleAttribute as CFString, &roleValue)
+            sysRole = (roleValue as? String) ?? "unknown"
+            var pid: pid_t = 0
+            if AXUIElementGetPid(sysElement, &pid) == .success { sysPid = String(pid) }
+        }
+        return "win=\(windowError.rawValue) sys=\(sysError.rawValue)/\(sysRole)/pid=\(sysPid)"
     }
 
     static func selectedTextRange(of element: AXUIElement) -> CFRange? {

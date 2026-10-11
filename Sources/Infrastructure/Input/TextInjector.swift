@@ -29,7 +29,8 @@ protocol AXPort {
     func readRange(_ handle: AXElementHandle) -> CFRange?
     func writeSelectedText(_ handle: AXElementHandle, _ text: String) -> Bool
     func writeValueSplice(_ handle: AXElementHandle, _ text: String) -> Bool
-    /// Clipboard paste WITH restore of prior clipboard contents.
+    /// Clipboard paste: restores the prior clipboard on receipt, keeps the dictation
+    /// as a plain string when nothing read it. Returns right after Cmd+V.
     func paste(_ text: String)
     /// Leaves `text` on the clipboard, no restore.
     func copyOnly(_ text: String)
@@ -42,18 +43,100 @@ enum TextInjector {
         case copiedToClipboard
     }
 
+    /// Why `assessTarget` found nothing to inject into.
+    enum NoTargetReason: Equatable, CustomStringConvertible {
+        case noFrontmostApp
+        /// Focus query failed (e.g. -25212 `kAXErrorNoValue` while a web tree is cold),
+        /// or succeeded with no element (raw 0).
+        case axError(Int32)
+        case nonText(role: String)
+        /// Bare `AXWebArea`: page has focus but no specific input.
+        case webContainer
+
+        var description: String {
+            switch self {
+            case .noFrontmostApp: "noFrontmostApp"
+            case .axError(let code): "axError(\(code))"
+            case .nonText(let role): "nonText(\(role))"
+            case .webContainer: "webContainer"
+            }
+        }
+    }
+
+    enum TargetAssessment: Equatable {
+        case target(role: String)
+        case noTarget(NoTargetReason)
+    }
+
+    /// Pure verdict over the facts of one focus query (see `FocusProbe`).
+    /// `role` is nil when the query produced no element.
+    static func classify(
+        appPresent: Bool,
+        focusError: AXError,
+        role: String?,
+        valueSettable: Bool
+    ) -> TargetAssessment {
+        guard appPresent else { return .noTarget(.noFrontmostApp) }
+        guard focusError == .success, let role else { return .noTarget(.axError(focusError.rawValue)) }
+        if role == "AXWebArea" { return .noTarget(.webContainer) }
+        guard FocusedTextElementLocator.acceptsText(role: role, valueSettable: valueSettable) else {
+            return .noTarget(.nonText(role: role))
+        }
+        return .target(role: role)
+    }
+
+    /// Reads the frontmost app's focus state, classifies it and logs the decision
+    /// (`.debug`: stderr + os_log, never a Sentry breadcrumb) so "which apps hit the
+    /// no-target path and why" is answerable from the log.
+    @MainActor
+    static func assessTarget() -> TargetAssessment {
+        guard let frontApp = NSWorkspace.shared.frontmostApplication else {
+            let assessment = classify(appPresent: false, focusError: .success, role: nil, valueSettable: false)
+            AppLogger.input.debug("gate app=- \(logSummary(for: assessment))")
+            return assessment
+        }
+        let probe = FocusedTextElementLocator.probe(for: frontApp)
+        let assessment = classify(
+            appPresent: true,
+            focusError: probe.error,
+            role: probe.role,
+            valueSettable: probe.valueSettable
+        )
+
+        var fields = "gate app=\(frontApp.bundleIdentifier ?? "-") pid=\(frontApp.processIdentifier)"
+        fields += " focusErr=\(probe.error.rawValue) role=\(probe.role ?? "-")"
+        fields += " settable=\(probe.element == nil ? "-" : String(probe.valueSettable))"
+        // Target path: `route` walks for a web ancestor itself and logs it, no need to here.
+        if case .noTarget = assessment {
+            fields += " \(FocusedTextElementLocator.diagnosticContext(for: frontApp))"
+        }
+        AppLogger.input.debug("\(fields) \(logSummary(for: assessment))")
+        return assessment
+    }
+
+    private static func logSummary(for assessment: TargetAssessment) -> String {
+        switch assessment {
+        case .target: "-> target"
+        case .noTarget(let reason): "-> noTarget(\(reason))"
+        }
+    }
+
     /// True if there is a frontmost app with a concrete focused text element that
     /// `inject` can place text into - a native field, or a real text input nested in
     /// web content (which `inject` pastes into via Cmd+V). A bare `AXWebArea`
     /// *container* means the page has keyboard focus but no specific input is
     /// selected (user clicked page chrome, not a field); that is NOT a real target,
     /// so it - like a wholly absent focus (Spotlight, the desktop) - returns false
-    /// and is routed to the no-focus behavior (paste-and-keep with a notification).
+    /// and is routed to the no-focus behavior (receipt paste: restore if a consumer
+    /// read it, otherwise keep on the clipboard with a notification).
+    ///
+    /// Settles an older outstanding receipt first: the AX probe below would otherwise
+    /// talk to an app that may be about to read that promise.
     @MainActor
     static func hasInjectableTarget() -> Bool {
-        guard let frontApp = NSWorkspace.shared.frontmostApplication else { return false }
-        guard let focused = FocusedTextElementLocator.focusedElement(for: frontApp) else { return false }
-        return focused.role != "AXWebArea"
+        settleOutstanding()
+        if case .target = assessTarget() { return true }
+        return false
     }
 
     /// Insert text into the focused text field of the frontmost app.
@@ -120,8 +203,8 @@ enum TextInjector {
     /// Marks the pasteboard entry as transient/concealed (`org.nspasteboard.*`) so
     /// clipboard managers (Raycast/Alfred/Maccy/Paste) skip recording it - dictations
     /// shouldn't linger in clipboard-manager history.
-    private static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
-    private static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+    static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+    static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
 
     @MainActor
     private static func declareTransient(on pasteboard: NSPasteboard) {
@@ -129,33 +212,119 @@ enum TextInjector {
         pasteboard.setData(Data(), forType: concealedType)
     }
 
-    @MainActor
-    static func pasteViaClipboard(_ text: String, pasteboard: NSPasteboard = .general) {
-        let restorer = ClipboardRestorer(pasteboard: pasteboard, writtenText: text)
-
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-        declareTransient(on: pasteboard)
-        simulateCmdV()
-        restorer.restore()
+    /// A receipt paste in flight on one pasteboard, until its settle task finishes.
+    private struct OutstandingPaste {
+        let receipt: PasteReceipt
+        let text: String
+        let writeCount: Int
     }
 
-    /// No-detectable-field "paste anyway" path for the `.clipboard` no-focus mode:
-    /// leave the dictation on the clipboard (persisting, unlike `pasteViaClipboard`
-    /// which restores the prior contents) then fire Cmd+V. Lands in targets that
-    /// have keyboard focus but expose no AX text element (Spotlight, some Electron);
-    /// if the blind paste goes nowhere the text stays on the clipboard for a manual
-    /// paste.
+    /// One live receipt per pasteboard (keyed by name), settled by the next delivery.
     @MainActor
-    static func pasteKeepingClipboard(_ text: String, pasteboard: NSPasteboard = .general) {
-        copyToClipboard(text, pasteboard: pasteboard)
-        simulateCmdV()
+    private static var outstanding: [String: OutstandingPaste] = [:]
+
+    @MainActor
+    static func hasOutstandingReceipt(on pasteboard: NSPasteboard = .general) -> Bool {
+        outstanding[pasteboard.name.rawValue] != nil
+    }
+
+    /// Writes `text` as a lazy pasteboard promise, posts Cmd+V and settles on what a
+    /// consumer does with it, in a task of its own (it outlives a cancelled caller):
+    /// - read: restore the prior clipboard after `grace`, result true (consumed)
+    /// - no read within `timeout`, board untouched: keep the dictation as a plain
+    ///   string, result false (nothing took the paste, caller shows the pill)
+    /// - no read, board changed by someone else: leave it alone, result true
+    /// - superseded by the next delivery (`settleOutstanding`): result false
+    ///
+    /// The one clipboard paste: the no-target branch awaits the result, the `route`
+    /// legs (`SystemAXPort.paste`) let the task settle in the background. Also lands in
+    /// targets that have keyboard focus but expose no AX text element (Spotlight-like
+    /// panels, cold web trees).
+    @MainActor
+    @discardableResult
+    static func startReceiptPaste(
+        _ text: String,
+        pasteboard: NSPasteboard = .general,
+        sendPaste: @MainActor () -> Void = simulateCmdV,
+        grace: Duration = .milliseconds(150),
+        timeout: Duration = .milliseconds(1500)
+    ) -> Task<Bool, Never> {
+        // Before the snapshot: reading `.string` of an older promise would fire its provider.
+        settleOutstanding(on: pasteboard)
+
+        let restorer = ClipboardRestorer(pasteboard: pasteboard, writtenText: text)
+        let receipt = PasteReceipt(text: text)
+        let writeCount = receipt.write(to: pasteboard)
+        let key = pasteboard.name.rawValue
+        outstanding[key] = OutstandingPaste(receipt: receipt, text: text, writeCount: writeCount)
+
+        let started = ContinuousClock.now
+        sendPaste()
+
+        return Task { @MainActor in
+            _ = await receipt.waitForRead(timeout: timeout)
+            defer {
+                if outstanding[key]?.receipt === receipt { outstanding[key] = nil }
+            }
+
+            // Superseded: `settleOutstanding` already rewrote (or left) the board.
+            if receipt.isAbandoned { return false }
+
+            // `hasBeenRead` rather than the wait result: a read can land between the
+            // timeout resolving the wait and this task resuming.
+            if let readAt = receipt.readInstant {
+                let delta = pasteboard.changeCount - writeCount
+                AppLogger.input.info("Paste receipt after \(readAt - started), changeCount +\(delta)")
+                restorer.restore(after: grace)
+                return true
+            }
+
+            if pasteboard.changeCount == writeCount {
+                copyToClipboard(text, pasteboard: pasteboard)
+                AppLogger.input.info("No paste receipt, kept dictation on clipboard")
+                return false
+            }
+            AppLogger.input.info("No paste receipt, clipboard moved on")
+            return true
+        }
+    }
+
+    @MainActor
+    static func pasteWithReceipt(
+        _ text: String,
+        pasteboard: NSPasteboard = .general,
+        sendPaste: @MainActor () -> Void = simulateCmdV,
+        grace: Duration = .milliseconds(150),
+        timeout: Duration = .milliseconds(1500)
+    ) async -> Bool {
+        await startReceiptPaste(
+            text, pasteboard: pasteboard, sendPaste: sendPaste, grace: grace, timeout: timeout
+        ).value
+    }
+
+    /// Applies the timeout rule to the outstanding receipt on `pasteboard` now: no read
+    /// and board untouched -> keep the dictation as a plain string (drops the promise),
+    /// wait resolved as not consumed. A latched read is left to its settle task (the
+    /// restore is owed there). No-op when nothing is outstanding on that board.
+    @MainActor
+    static func settleOutstanding(on pasteboard: NSPasteboard = .general) {
+        guard let pending = outstanding[pasteboard.name.rawValue],
+            !pending.receipt.hasBeenRead, !pending.receipt.isAbandoned
+        else { return }
+
+        pending.receipt.abandon()
+        if pasteboard.changeCount == pending.writeCount {
+            copyToClipboard(pending.text, pasteboard: pasteboard)
+            AppLogger.input.info("Paste receipt superseded by next delivery, kept dictation on clipboard")
+        } else {
+            AppLogger.input.info("Paste receipt superseded by next delivery, clipboard moved on")
+        }
     }
 
     /// Last-resort `.copiedToClipboard` path: no frontmost app to paste into, so
     /// leave the dictation on the clipboard for the user to paste manually.
-    /// Intentionally does NOT save/restore prior contents (unlike pasteViaClipboard) -
-    /// the dictation must remain on the pasteboard after this returns.
+    /// Intentionally does NOT save/restore prior contents - the dictation must remain
+    /// on the pasteboard after this returns.
     @MainActor
     static func copyToClipboard(_ text: String, pasteboard: NSPasteboard = .general) {
         pasteboard.clearContents()
@@ -163,7 +332,7 @@ enum TextInjector {
         declareTransient(on: pasteboard)
     }
 
-    private static func simulateCmdV() {
+    static func simulateCmdV() {
         let source = CGEventSource(stateID: .hidSystemState)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)
         keyDown?.flags = .maskCommand
@@ -212,7 +381,8 @@ struct SystemAXPort: AXPort {
     }
 
     func paste(_ text: String) {
-        TextInjector.pasteViaClipboard(text)
+        // Not awaited: `route` stays synchronous, the settle task finishes in the background.
+        TextInjector.startReceiptPaste(text)
     }
 
     func copyOnly(_ text: String) {
