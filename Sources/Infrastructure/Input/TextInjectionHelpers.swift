@@ -70,6 +70,18 @@ struct ClipboardRestorer {
     }
 }
 
+enum AXMessaging {
+    /// A hung target app otherwise blocks each AX call ~6 s, and this runs on main
+    /// (the same run loop as the event tap). Per element; also set on the app element.
+    static let timeout: Float = 0.5
+
+    @discardableResult
+    static func bounded(_ element: AXUIElement) -> AXUIElement {
+        AXUIElementSetMessagingTimeout(element, timeout)
+        return element
+    }
+}
+
 struct FocusedTextElement {
     let element: AXUIElement
     let role: String
@@ -99,7 +111,7 @@ enum FocusedTextElementLocator {
     }
 
     static func probe(for frontApp: NSRunningApplication) -> FocusProbe {
-        let appRef = AXUIElementCreateApplication(frontApp.processIdentifier)
+        let appRef = AXMessaging.bounded(AXUIElementCreateApplication(frontApp.processIdentifier))
 
         var focusedValue: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(
@@ -111,7 +123,7 @@ enum FocusedTextElementLocator {
             return FocusProbe(error: result, element: nil, role: nil, valueSettable: false)
         }
 
-        let axElement = element as! AXUIElement
+        let axElement = AXMessaging.bounded(element as! AXUIElement)
 
         var roleValue: CFTypeRef?
         AXUIElementCopyAttributeValue(axElement, kAXRoleAttribute as CFString, &roleValue)
@@ -142,19 +154,19 @@ enum FocusedTextElementLocator {
     /// `sys` is the system-wide focused element with its owning pid (frontmost-app
     /// attribution, e.g. Spotlight).
     static func diagnosticContext(for frontApp: NSRunningApplication) -> String {
-        let appRef = AXUIElementCreateApplication(frontApp.processIdentifier)
+        let appRef = AXMessaging.bounded(AXUIElementCreateApplication(frontApp.processIdentifier))
         var windowValue: CFTypeRef?
         let windowError = AXUIElementCopyAttributeValue(
             appRef, kAXFocusedWindowAttribute as CFString, &windowValue)
 
-        let systemWide = AXUIElementCreateSystemWide()
+        let systemWide = AXMessaging.bounded(AXUIElementCreateSystemWide())
         var sysValue: CFTypeRef?
         let sysError = AXUIElementCopyAttributeValue(
             systemWide, kAXFocusedUIElementAttribute as CFString, &sysValue)
         var sysRole = "-"
         var sysPid = "-"
         if sysError == .success, let sysValue {
-            let sysElement = sysValue as! AXUIElement
+            let sysElement = AXMessaging.bounded(sysValue as! AXUIElement)
             var roleValue: CFTypeRef?
             AXUIElementCopyAttributeValue(sysElement, kAXRoleAttribute as CFString, &roleValue)
             sysRole = (roleValue as? String) ?? "unknown"
@@ -180,7 +192,7 @@ enum FocusedTextElementLocator {
             guard AXUIElementCopyAttributeValue(current, kAXParentAttribute as CFString, &parentRef) == .success,
                 let parent = parentRef
             else { break }
-            let axParent = parent as! AXUIElement
+            let axParent = AXMessaging.bounded(parent as! AXUIElement)
             var roleRef: CFTypeRef?
             AXUIElementCopyAttributeValue(axParent, kAXRoleAttribute as CFString, &roleRef)
             if (roleRef as? String) == "AXWebArea" { return true }
@@ -227,12 +239,17 @@ enum ValueSpliceInjector {
             AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, newRangeValue)
         }
 
-        guard let afterRange = FocusedTextElementLocator.selectedTextRange(of: element),
+        if let afterRange = FocusedTextElementLocator.selectedTextRange(of: element),
             afterRange.location == newCursorPos, afterRange.length == 0
-        else {
-            return false
+        {
+            return true
         }
 
-        return true
+        // Cursor read-back mismatched. Distinguish "write landed, cursor wrong" (true:
+        // a clipboard-paste fallback would insert the text twice) from "write ignored"
+        // (false: apps that accept the AX call but never apply it, e.g. terminals).
+        var readBack: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &readBack)
+        return (readBack as? String) == newValue
     }
 }
