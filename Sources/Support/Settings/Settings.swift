@@ -1,3 +1,4 @@
+import DictateCore
 import Foundation
 import ServiceManagement
 

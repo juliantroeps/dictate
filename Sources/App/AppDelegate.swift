@@ -1,4 +1,5 @@
 import AppKit
+import DictateCore
 import SwiftUI
 
 @MainActor

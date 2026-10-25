@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import DictateCore
 
 enum MicrophonePermission {
     static var isGranted: Bool {

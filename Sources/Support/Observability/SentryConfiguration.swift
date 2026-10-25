@@ -1,3 +1,4 @@
+import DictateCore
 import Foundation
 import Sentry
 
@@ -16,6 +17,7 @@ enum SentryConfiguration {
 
     /// Starts the Sentry SDK. Call as early as possible (before `app.run()`).
     static func start() {
+        AppLogger.setReporter(SentryLogReporter())
         SentrySDK.start { options in
             options.dsn = dsn
 
@@ -141,5 +143,16 @@ enum SentryConfiguration {
                 SentrySDK.capture(message: "Sentry verify - dictate")
             }
         #endif
+    }
+}
+
+/// Bridges DictateCore's AppLogger (which must not link Sentry) to the helpers above.
+private struct SentryLogReporter: LogReporter {
+    func breadcrumb(category: String, message: String, warning: Bool) {
+        SentryConfiguration.breadcrumb(category: category, message: message, warning: warning)
+    }
+
+    func captureError(category: String, message: String) {
+        SentryConfiguration.captureError(category: category, message: message)
     }
 }

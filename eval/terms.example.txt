@@ -1,0 +1,11 @@
+# Case-sensitive jargon for term recall, one per line. Copy to eval/terms.txt (gitignored).
+Next.js
+TypeScript
+GraphQL
+PostgreSQL
+Kubernetes
+Terraform
+Supabase
+Prisma
+pnpm
+Claude

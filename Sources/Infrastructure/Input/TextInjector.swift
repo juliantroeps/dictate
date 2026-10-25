@@ -1,5 +1,6 @@
 import AppKit
 @preconcurrency import ApplicationServices
+import DictateCore
 import Foundation
 
 /// Opaque wrapper around an `AXUIElement` so the routing logic in `TextInjector.route`

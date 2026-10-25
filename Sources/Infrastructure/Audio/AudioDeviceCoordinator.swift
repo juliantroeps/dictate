@@ -1,4 +1,5 @@
 import CoreAudio
+import DictateCore
 import Foundation
 import Observation
 

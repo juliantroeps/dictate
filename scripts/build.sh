@@ -7,7 +7,7 @@ DIST="dist"
 APP="$DIST/Dictate.app"
 
 # Build (Apple Silicon only)
-swift build -c release \
+swift build -c release --product dictate \
     -Xswiftc -no-whole-module-optimization
 
 # Assemble .app bundle

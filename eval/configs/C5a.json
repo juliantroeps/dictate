@@ -1,0 +1,5 @@
+{
+  "name": "C5a",
+  "model": "openai_whisper-large-v3-v20240930_547MB",
+  "prompt": true
+}

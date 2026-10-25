@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 
+@testable import DictateCore
 @testable import dictate
 
 struct WhisperKitEngineTests {

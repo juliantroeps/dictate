@@ -16,3 +16,9 @@ dist/
 thoughts/
 # Icon source assets (generated; AppIcon.icns is the committed artifact)
 media/Assets.xcassets/
+
+# Eval harness: personal clips, references, terms and results stay local; configs + docs are tracked
+eval/*
+!eval/README.md
+!eval/configs/
+!eval/terms.example.txt

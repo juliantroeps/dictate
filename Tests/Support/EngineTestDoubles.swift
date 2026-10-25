@@ -1,5 +1,6 @@
 import Foundation
 
+@testable import DictateCore
 @testable import dictate
 
 /// Controllable stand-in for `WhisperKitEngine`, used to drive
@@ -17,6 +18,8 @@ final class FakeTranscriptionEngine: TranscriptionEngine, @unchecked Sendable {
     /// Outcome for prepare(); defaults to instant success.
     var prepareBehavior: (@Sendable () async throws -> Void)?
     var prepareDelay: Duration?
+    /// When set, transcribe() throws it instead of returning text.
+    var transcribeError: (any Error)?
     private(set) var prepareCallCount = 0
     private(set) var unloadCallCount = 0
 
@@ -34,7 +37,8 @@ final class FakeTranscriptionEngine: TranscriptionEngine, @unchecked Sendable {
     }
 
     func transcribe(audioSamples: [Float]) async throws -> String {
-        "fake transcription"
+        if let transcribeError { throw transcribeError }
+        return "fake transcription"
     }
 
     func unload() async {
