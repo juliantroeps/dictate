@@ -1,4 +1,5 @@
 import AppKit
+import DictateCore
 import Foundation
 
 /// Pasteboard promise for one dictation paste. The `.string` flavor is lazy: the

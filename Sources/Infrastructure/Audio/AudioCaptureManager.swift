@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 import CoreAudio
+import DictateCore
 
 @MainActor
 final class AudioCaptureManager {

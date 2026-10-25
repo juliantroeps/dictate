@@ -1,0 +1,5 @@
+{
+  "name": "C0",
+  "model": "openai_whisper-small.en",
+  "prompt": true
+}

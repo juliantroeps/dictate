@@ -1,6 +1,7 @@
 import CoreAudio
 import Foundation
 
+@testable import DictateCore
 @testable import dictate
 
 @MainActor

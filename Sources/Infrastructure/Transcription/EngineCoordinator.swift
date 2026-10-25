@@ -1,3 +1,4 @@
+import DictateCore
 import Foundation
 
 @MainActor
@@ -32,6 +33,8 @@ final class EngineCoordinator: TranscriptionEngineCoordinating {
     private let runtimeState: DictationRuntimeState
     private let engineFactory: (String) -> TranscriptionEngine
     private let retryDelay: (Int) -> Duration
+    private let captureRecorder: CaptureRecorder?
+    private let captureDevice: @MainActor () -> CaptureRecorder.InputDevice
     private var engine: TranscriptionEngine
     private var loadTask: Task<Void, Never>?
     private var loadGeneration: Int = 0
@@ -46,13 +49,20 @@ final class EngineCoordinator: TranscriptionEngineCoordinating {
         runtimeState: DictationRuntimeState = DictationRuntimeState(),
         engine: TranscriptionEngine? = nil,
         engineFactory: @escaping (String) -> TranscriptionEngine = { WhisperKitEngine(model: $0) },
-        retryDelay: @escaping (Int) -> Duration = { .seconds(Double($0) * 2) }
+        retryDelay: @escaping (Int) -> Duration = { .seconds(Double($0) * 2) },
+        captureRecorder: CaptureRecorder? = CaptureRecorder.fromEnvironment(),
+        captureDevice: @escaping @MainActor () -> CaptureRecorder.InputDevice = { CaptureRecorder.systemInputDevice() }
     ) {
         self.settings = settings
         self.overlay = overlay
         self.runtimeState = runtimeState
         self.engineFactory = engineFactory
         self.retryDelay = retryDelay
+        self.captureRecorder = captureRecorder
+        self.captureDevice = captureDevice
+        if captureRecorder != nil {
+            AppLogger.audio.info("\(CaptureRecorder.environmentKey)=1: saving captures to ~/.dictate/captures")
+        }
         self.engine = engine ?? engineFactory(settings.whisperModel)
     }
 
@@ -69,7 +79,23 @@ final class EngineCoordinator: TranscriptionEngineCoordinating {
     }
 
     func transcribe(audioSamples: [Float]) async throws -> String {
-        try await engine.transcribe(audioSamples: audioSamples)
+        // Single choke point for key-up, interrupted and buffered dictations. Empty results and
+        // thrown errors (incl. cancellation after a timeout) are recorded too: those are the clips
+        // the eval corpus needs most. A wedged engine that never returns cannot be recorded.
+        guard let captureRecorder else {
+            return try await engine.transcribe(audioSamples: audioSamples)
+        }
+        let model = settings.whisperModel
+        let device = captureDevice()
+        do {
+            let text = try await engine.transcribe(audioSamples: audioSamples)
+            captureRecorder.save(samples: audioSamples, model: model, device: device, hypothesis: text, error: nil)
+            return text
+        } catch {
+            captureRecorder.save(
+                samples: audioSamples, model: model, device: device, hypothesis: nil, error: String(describing: error))
+            throw error
+        }
     }
 
     func unload() {

@@ -1,5 +1,6 @@
 import AppKit
 import CoreAudio
+import DictateCore
 import Foundation
 
 @MainActor

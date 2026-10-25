@@ -3,6 +3,7 @@ import CoreAudio
 import Foundation
 import Testing
 
+@testable import DictateCore
 @testable import dictate
 
 @Suite(.serialized)

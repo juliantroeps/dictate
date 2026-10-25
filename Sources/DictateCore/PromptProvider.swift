@@ -1,6 +1,6 @@
 import Foundation
 
-enum PromptProvider {
+public enum PromptProvider {
     static let promptFilePath = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".dictate/prompt.txt")
 
@@ -8,13 +8,13 @@ enum PromptProvider {
     // set (TextDecoder.swift:354 TODO), so every prompt token is decoded
     // token-by-token on EVERY dictation. Keep this short - only genuinely
     // misrecognized, high-value terms.
-    static let defaultPrompt = """
+    public static let defaultPrompt = """
         Software engineer dictating about web development. Preserve casing: \
         Next.js, TypeScript, GraphQL, PostgreSQL, MongoDB, Kubernetes, \
         Terraform, Supabase, Prisma, pnpm, Cursor, Claude.
         """
 
-    static func resolve() -> String {
+    public static func resolve() -> String {
         resolve(from: promptFilePath)
     }
 

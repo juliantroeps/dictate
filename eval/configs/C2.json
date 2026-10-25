@@ -1,0 +1,6 @@
+{
+  "name": "C2",
+  "model": "openai_whisper-small.en",
+  "prompt": true,
+  "options": { "windowClipTime": 1.0 }
+}

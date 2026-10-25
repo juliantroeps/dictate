@@ -1,0 +1,5 @@
+{
+  "name": "C7",
+  "model": "openai_whisper-medium.en",
+  "prompt": true
+}

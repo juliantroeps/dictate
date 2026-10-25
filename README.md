@@ -68,6 +68,14 @@ SPM fetches WhisperKit and dependencies automatically. First build takes a while
 
 The script runs `swift build`, `swift test`, `swiftlint lint --strict`, and `swift-format lint --configuration .swiftformat -r Sources Tests` when the tools are installed.
 
+### Eval harness
+
+`dictate-eval` replays recorded clips through the app's own `WhisperKitEngine` and reports WER, term recall, empty rate and latency per config, so model and prompt changes can be judged on data. Run the app with `DICTATE_SAVE_CAPTURES=1` to save real dictations (audio + metadata, local only, off by default) to `~/.dictate/captures/`, then see [eval/README.md](eval/README.md) for building a corpus and running configs.
+
+```sh
+scripts/eval.sh C0 C1
+```
+
 ### Code Quality Guardrails
 
 - Keep persisted preferences in `Settings`. Session-only state lives in `DictationRuntimeState` and is owned by the coordinator layer.
@@ -114,6 +122,8 @@ Model files are downloaded by WhisperKit and cached in `~/Library/Caches/`.
 - `Sources/Infrastructure`
 - `Sources/UI`
 - `Sources/Support`
+
+`Sources/DictateCore` is a separate library target (transcription engine, prompt provider, `AppLogger`) shared by the app and `dictate-eval`. It must not depend on Sentry or any UI.
 
 `Tests/` now holds the unit-test target that exercises shared policy and utility code.
 

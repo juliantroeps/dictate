@@ -1,0 +1,5 @@
+{
+  "name": "C6",
+  "model": "distil-whisper_distil-large-v3_594MB",
+  "prompt": true
+}

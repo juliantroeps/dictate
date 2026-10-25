@@ -1,4 +1,5 @@
 import CoreAudio
+import DictateCore
 
 enum SystemAudioController {
     private static var defaultOutputDevice: AudioDeviceID {

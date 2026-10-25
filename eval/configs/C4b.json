@@ -1,0 +1,6 @@
+{
+  "name": "C4b",
+  "model": "openai_whisper-small.en",
+  "prompt": true,
+  "options": { "temperatureFallbackCount": 5 }
+}

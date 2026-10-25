@@ -1,4 +1,5 @@
 import CoreGraphics
+import DictateCore
 import Foundation
 
 final class KeyListener {
