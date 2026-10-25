@@ -9,6 +9,7 @@ private final class LockedFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var flag = false
     func set() { lock.withLock { flag = true } }
+    func reset() { lock.withLock { flag = false } }
     var value: Bool { lock.withLock { flag } }
 }
 
@@ -161,33 +162,57 @@ struct AudioCaptureManagerTests {
             recorder.record()
             return AVAudioEngine()
         })
+        manager.setRecordingForTesting(true)
         manager.triggerConfigChangeForTesting()
-        #expect(recorder.buildCount >= 2, "config change must build a replacement engine")
+        #expect(recorder.buildCount >= 2, "config change while recording must build a replacement engine")
     }
 
     @Test
-    func startRecordingAfterConfigChangeTapsTheFreshEngine() async {
-        // Regression for the stale-engine race: after a swap, the tap/start must operate
-        // on the newly installed engine, not the torn-down old one.
-        let manager = AudioCaptureManager(makeEngine: { @Sendable in AVAudioEngine() })
+    func idleConfigChangeOnTappedEngineSwapsLazilyAtNextStart() async {
+        // Idle config change must not churn engines; the stale (previously tapped) engine
+        // is swapped at the next start, and the tap lands on the fresh one.
+        let recorder = EngineBuildRecorder()
+        let manager = AudioCaptureManager(makeEngine: { @Sendable in
+            recorder.record()
+            return AVAudioEngine()
+        })
+        manager.markEngineTappedForTesting()
+        let stale = manager.currentEngineForTesting
 
-        // Trigger a config-change swap (synchronous on-main assignment now).
         manager.triggerConfigChangeForTesting()
-        let fresh = manager.currentEngineForTesting
+        #expect(recorder.buildCount == 1, "idle config change must not build an engine")
+        #expect(manager.currentEngineForTesting === stale)
 
-        // Immediately attempt a record (key-down). On CI, start() fails after the tap is
-        // installed, but installRecordingTap already recorded which engine it tapped.
+        // On CI, start() fails after the tap is installed, but lastTappedEngine is recorded.
         _ = try? await Task { @MainActor in try await manager.startRecording() }.value
+        _ = manager.stopRecording()
 
-        #expect(
-            manager.lastTappedEngine === fresh,
-            "tap must be installed on the engine swapped in on main, not the torn-down one")
+        #expect(manager.lastTappedEngine != nil)
+        #expect(manager.lastTappedEngine !== stale, "next start must tap a fresh engine, not the stale one")
+    }
+
+    @Test
+    func idleConfigChangeOnUntouchedEngineDoesNotMarkStale() async {
+        // An untouched engine binds to the default input at first use: no swap needed.
+        let recorder = EngineBuildRecorder()
+        let manager = AudioCaptureManager(makeEngine: { @Sendable in
+            recorder.record()
+            return AVAudioEngine()
+        })
+        let initial = manager.currentEngineForTesting
+
+        manager.triggerConfigChangeForTesting()
+        _ = try? await Task { @MainActor in try await manager.startRecording() }.value
+        _ = manager.stopRecording()
+
+        #expect(manager.lastTappedEngine === initial, "untouched engine must be tapped directly")
     }
 
     @Test
     func configChangeAssignsReplacementEngineSynchronouslyOnMain() {
         let manager = AudioCaptureManager()
         let before = manager.currentEngineForTesting
+        manager.setRecordingForTesting(true)
         manager.triggerConfigChangeForTesting()
         // No await: assignment must have already happened on main before returning.
         #expect(
@@ -275,10 +300,12 @@ struct AudioCaptureManagerTests {
                     }
                 }
             }
+            manager.setRecordingForTesting(true)
             manager.triggerConfigChangeForTesting()  // build #2; settle fires event when done
         }
         let countAfterFirstSettle = recorder.buildCount
 
+        manager.setRecordingForTesting(true)
         manager.triggerConfigChangeForTesting()  // must NOT be suppressed -> build #3
         #expect(
             recorder.buildCount > countAfterFirstSettle,
@@ -302,6 +329,7 @@ struct AudioCaptureManagerTests {
         let manager = AudioCaptureManager()
         let staleEpoch = manager.currentTapEpochForTesting
 
+        manager.setRecordingForTesting(true)
         manager.triggerConfigChangeForTesting()  // swapEngine() bumps the epoch
 
         #expect(
@@ -376,6 +404,7 @@ struct AudioCaptureManagerTests {
         let buildCountBefore = recorder.buildCount
         let engineBefore = manager.currentEngineForTesting
 
+        manager.setRecordingForTesting(true)
         manager.setStartingForTesting(true)
         manager.triggerEngineConfigChangeNotificationForTesting()
         #expect(
@@ -420,8 +449,10 @@ struct AudioCaptureManagerTests {
             if case .recordingInterrupted = event { interrupted.set() }
         }
 
+        manager.setRecordingForTesting(true)
         manager.triggerConfigChangeForTesting()
         let buildCountAfterFirst = recorder.buildCount
+        interrupted.reset()
 
         manager.triggerConfigChangeForTesting()  // settling, not recording -> dropped
 

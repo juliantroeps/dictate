@@ -87,6 +87,18 @@ enum SystemAudioController {
         }
     }
 
+    static func nominalSampleRate(for deviceID: AudioDeviceID) -> Double? {
+        var rate = Float64(0)
+        var size = UInt32(MemoryLayout<Float64>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &rate) == noErr else { return nil }
+        return rate
+    }
+
     static func transportType(for deviceID: AudioDeviceID) -> UInt32 {
         var transportType: UInt32 = 0
         var size = UInt32(MemoryLayout<UInt32>.size)

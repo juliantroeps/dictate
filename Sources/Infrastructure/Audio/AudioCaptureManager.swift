@@ -12,6 +12,13 @@ final class AudioCaptureManager {
     // teardown) runs here, off main and never concurrently. inputNode lazily creates
     // the AUHAL unit via sync XPC to coreaudiod, which stalls >2s after wake/device churn.
     private var engineQueue: DispatchQueue
+    // Whether the current engine's inputNode was ever touched (tap installed). An
+    // untouched engine binds to whatever the default input is at first use, so it
+    // never needs swapping on a device change.
+    private var engineTapped = false
+    // Idle config change on a tapped engine: swap lazily at the next start instead of
+    // churning engines (build + off-main teardown) on every default-input change.
+    private var engineStale = false
     private var configChangeObserver: Any?
     // targetFormat is immutable and accessed from the audio tap thread (nonisolated);
     // nonisolated(unsafe) is safe because it is set once in init and never mutated.
@@ -103,9 +110,12 @@ final class AudioCaptureManager {
         let oldQueue = engineQueue
         engine = makeEngine()
         engineQueue = Self.makeEngineQueue()
+        let oldTapped = engineTapped
+        engineTapped = false
+        engineStale = false
         setupEngineObserver()
         converterLock.withLock { converter = nil }
-        tearDownOffMain(oldEngine, on: oldQueue)
+        tearDownOffMain(oldEngine, on: oldQueue, tapped: oldTapped)
     }
 
     private static func makeEngineQueue() -> DispatchQueue {
@@ -115,14 +125,18 @@ final class AudioCaptureManager {
     /// Hand the old engine's full teardown to its own serial queue (ordered after any
     /// pending start/rollback on it, separate from the new engine's queue). removeTap/stop
     /// and the final dealloc all block on AVFAudio's private queue; off-main they block
-    /// harmlessly.
-    private func tearDownOffMain(_ oldEngine: AVAudioEngine, on queue: DispatchQueue) {
+    /// harmlessly. An untouched engine skips inputNode entirely (accessing it would
+    /// create the AUHAL unit just to tear it down).
+    private func tearDownOffMain(_ oldEngine: AVAudioEngine, on queue: DispatchQueue, tapped: Bool) {
         let box = UncheckedSendableBox(oldEngine)
         queue.async {
-            let engine = box.value
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
-            // `engine` (last strong ref) is released here, off-main -> dealloc blocks off-main.
+            if tapped {
+                box.value.inputNode.removeTap(onBus: 0)
+                box.value.stop()
+            }
+            // Hold the last strong ref ~1s so AVFAudio blocks still queued for this
+            // engine finish before dealloc (suspected EXC_BAD_ACCESS, Sentry 154550374).
+            queue.asyncAfter(deadline: .now() + 1) { withExtendedLifetime(box) {} }
         }
     }
 
@@ -193,6 +207,7 @@ final class AudioCaptureManager {
         defer { isStarting = false }
 
         bufferLock.withLock { buffer.removeAll(keepingCapacity: true) }
+        if engineStale { swapEngine() }
 
         var lastError: Error = AudioCaptureError.noInputDevice
         for attempt in 1...5 {
@@ -204,6 +219,7 @@ final class AudioCaptureManager {
 
             converterLock.withLock { converter = nil }
             let tap = makeTapBlock()
+            engineTapped = true
             #if DEBUG
                 lastTappedEngine = engine
             #endif
@@ -438,9 +454,13 @@ final class AudioCaptureManager {
         // Snapshot the buffer on main before handing off the old engine so a late
         // tap callback from the old engine cannot pollute the next recording.
         let capturedSamples: [Float]? = isRecording ? captureBuffer() : nil
-        if capturedSamples != nil { isRecording = false }
-
-        swapEngine()
+        if capturedSamples != nil {
+            isRecording = false
+            swapEngine()
+        } else if engineTapped {
+            // Idle: no engine churn. Swap lazily at the next start (see engineStale).
+            engineStale = true
+        }
 
         if let capturedSamples {
             AppLogger.audio.debug("Audio config changed during recording, captured \(capturedSamples.count) samples")
@@ -480,24 +500,33 @@ final class AudioCaptureManager {
     }
 
     private func validateFormatStability(completion: @escaping @Sendable (Bool) -> Void) {
-        // outputFormat(forBus:) queries the HAL synchronously and can stall while a
-        // device is still transitioning; read it off the main thread on both samples.
-        // The completion mutates main-actor state at the call site, so hop back to main
+        // Probes the default input device via CoreAudio instead of engine.inputNode, so
+        // validation never touches (or lazily creates the IO unit of) a just-swapped
+        // engine. HAL reads can stall mid-transition, so they stay off main. The
+        // completion mutates main-actor state at the call site, so hop back to main
         // before invoking it (off-main completion + MainActor.assumeIsolated -> fatal trap).
-        // Runs on the engine's serial queue so it cannot race a start on the same engine.
-        let engineBox = UncheckedSendableBox(engine)
-        let queue = engineQueue
         let validateDelay = self.validateDelay
-        queue.async {
-            let format1 = engineBox.value.inputNode.outputFormat(forBus: 0)
-            queue.asyncAfter(deadline: .now() + validateDelay) {
-                let format2 = engineBox.value.inputNode.outputFormat(forBus: 0)
-                let stable =
-                    format1.sampleRate == format2.sampleRate && format1.channelCount == format2.channelCount
-                    && format1.sampleRate > 0
+        DispatchQueue.global(qos: .userInitiated).async {
+            let first = Self.defaultInputProbe()
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + validateDelay) {
+                let second = Self.defaultInputProbe()
+                let stable = first != nil && first == second
                 DispatchQueue.main.async { completion(stable) }
             }
         }
+    }
+
+    private struct InputProbe: Equatable {
+        let deviceID: AudioDeviceID
+        let sampleRate: Double
+    }
+
+    /// Default input device + nominal sample rate, or nil if none / rate unknown.
+    nonisolated private static func defaultInputProbe() -> InputProbe? {
+        guard let deviceID = SystemAudioController.defaultInputDeviceID,
+            let rate = SystemAudioController.nominalSampleRate(for: deviceID), rate > 0
+        else { return nil }
+        return InputProbe(deviceID: deviceID, sampleRate: rate)
     }
 
     #if DEBUG
@@ -522,6 +551,9 @@ final class AudioCaptureManager {
             processAudioBuffer(buffer)
             return true
         }
+
+        /// Marks the current engine as tapped (test-only - simulates a prior start attempt).
+        func markEngineTappedForTesting() { engineTapped = true }
 
         /// Forces isRecording (test-only - simulates a hold that started mid-settle).
         func setRecordingForTesting(_ value: Bool) { isRecording = value }
