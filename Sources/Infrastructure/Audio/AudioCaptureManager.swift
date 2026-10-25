@@ -365,17 +365,9 @@ final class AudioCaptureManager {
             )
         else { return }
 
-        let converter: AVAudioConverter? = converterLock.withLock {
-            if self.converter == nil || self.converter!.inputFormat != inputBuffer.format {
-                self.converter = AVAudioConverter(from: inputBuffer.format, to: targetFormat)
-            }
-            return self.converter
-        }
-        guard let converter else { return }
-
         guard
             let outputBuffer = AVAudioPCMBuffer(
-                pcmFormat: converter.outputFormat,
+                pcmFormat: targetFormat,
                 frameCapacity: outputFrameCount
             )
         else { return }
@@ -383,15 +375,26 @@ final class AudioCaptureManager {
         var error: NSError?
         var inputConsumed = false
 
-        converter.convert(to: outputBuffer, error: &error) { _, outStatus in
-            if inputConsumed {
-                outStatus.pointee = .noDataNow
-                return nil
+        // Hold converterLock across convert: the key-up tail drain in stopRecording /
+        // handleConfigChange runs the same converter under this lock while the tap is
+        // still live, and AVAudioConverter is not safe for concurrent convert calls.
+        let converted: Bool = converterLock.withLock {
+            if self.converter == nil || self.converter!.inputFormat != inputBuffer.format {
+                self.converter = AVAudioConverter(from: inputBuffer.format, to: targetFormat)
             }
-            inputConsumed = true
-            outStatus.pointee = .haveData
-            return inputBuffer
+            guard let converter = self.converter else { return false }
+            converter.convert(to: outputBuffer, error: &error) { _, outStatus in
+                if inputConsumed {
+                    outStatus.pointee = .noDataNow
+                    return nil
+                }
+                inputConsumed = true
+                outStatus.pointee = .haveData
+                return inputBuffer
+            }
+            return true
         }
+        guard converted else { return }
 
         if let error {
             // Do not log (OSLog + fputs + Sentry capture) from the realtime render

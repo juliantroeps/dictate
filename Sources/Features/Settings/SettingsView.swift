@@ -149,7 +149,7 @@ struct SettingsView: View {
                             .foregroundColor(.green)
                     } else {
                         Button {
-                            MicrophonePermission.requestInBackground()
+                            MicrophonePermission.requestOrOpenSettings()
                         } label: {
                             Label("Microphone", systemImage: "exclamationmark.triangle.fill")
                                 .foregroundColor(.orange)

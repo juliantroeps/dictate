@@ -341,6 +341,7 @@ struct DictationCoordinatorTests {
             settings: settings,
             now: { DispatchTime(uptimeNanoseconds: currentTime) },
             transcriptionTimeout: .milliseconds(10),
+            transcriptionTimeoutPerAudioSecond: 0,
             injectText: { _ in .pasted },
         )
 
@@ -385,6 +386,7 @@ struct DictationCoordinatorTests {
             settings: settings,
             now: { DispatchTime(uptimeNanoseconds: currentTime) },
             transcriptionTimeout: .milliseconds(20),
+            transcriptionTimeoutPerAudioSecond: 0,
             injectText: { _ in .pasted },
         )
 
@@ -1564,9 +1566,66 @@ struct DictationCoordinatorTests {
 
         coordinator.recoverPersistedMuteOnLaunch()
 
-        // No persisted UID: falls back to unmuting the current default device.
-        #expect(fakeMute.calls.count == 1)
-        #expect(fakeMute.calls[0] == (muted: false, device: 1))
+        // No persisted UID: never touches the user's current (possibly intentionally muted) output.
+        #expect(fakeMute.calls.isEmpty)
         #expect(settings.activeMuteDeviceUID == nil)
+    }
+
+    // MARK: - Transcription timeout scaling
+
+    @Test @MainActor
+    func transcriptionTimeoutScalesWithCapturedAudio() async {
+        let settings = FakeDictationSettings()
+        settings.minHoldDuration = 0.1
+        settings.muteSystemAudio = false
+
+        var currentTime: UInt64 = 1_000_000_000
+        let audioCapture = FakeAudioCaptureManager()
+        let overlay = FakeOverlayController()
+        let engine = FakeTranscriptionEngineCoordinator()
+        engine.isReady = true
+        engine.transcribeBehavior = { _ in
+            try await Task.sleep(for: .milliseconds(50))
+            return "hello world"
+        }
+        var injected: [String] = []
+
+        // Floor (10ms) alone would time out the 50ms transcribe; 0.2s of audio * 1000 does not.
+        let coordinator = DictationCoordinator(
+            audioCapture: audioCapture,
+            overlay: overlay,
+            engineCoordinator: engine,
+            settings: settings,
+            now: { DispatchTime(uptimeNanoseconds: currentTime) },
+            transcriptionTimeout: .milliseconds(10),
+            transcriptionTimeoutPerAudioSecond: 1000,
+            injectText: {
+                injected.append($0)
+                return .pasted
+            },
+            hasInjectableTarget: { true }
+        )
+
+        coordinator.handleKeyDown()
+        currentTime += 500_000_000
+        coordinator.handleKeyUp()
+        await coordinator.runtimeState.transcriptionTask?.value
+
+        #expect(injected == ["hello world"])
+        #expect(engine.recoverCalls == 0)
+    }
+
+    @Test @MainActor
+    func timeoutKeepsFloorForShortClips() {
+        // 2s of audio * 4 = 8s, below the 30s floor.
+        let timeout = DictationCoordinator.timeout(floor: .seconds(30), sampleCount: 32_000, perAudioSecond: 4)
+        #expect(timeout == .seconds(30))
+    }
+
+    @Test @MainActor
+    func timeoutScalesWithLongClips() {
+        // 60s of audio * 4 = 240s, above the 30s floor.
+        let timeout = DictationCoordinator.timeout(floor: .seconds(30), sampleCount: 960_000, perAudioSecond: 4)
+        #expect(timeout == .seconds(240))
     }
 }

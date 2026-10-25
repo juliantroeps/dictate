@@ -45,7 +45,7 @@ Key components (by directory):
 
 - Inference is **on-device** (WhisperKit + CoreML); recorded audio never leaves the machine.
 - **First run downloads the model** from HuggingFace (`argmaxinc/whisperkit-coreml`) - needs network once. Subsequent runs are fully offline.
-- Models cache at `~/Documents/huggingface/models/argmaxinc/whisperkit-coreml/<model>/`; `WhisperKitEngine.cachedModelFolder()` reuses it when an `.mlmodelc` is present.
+- Models cache at `~/Documents/huggingface/models/argmaxinc/whisperkit-coreml/<model>/`; `WhisperKitEngine.cachedModelFolder()` reuses it only when `MelSpectrogram`, `AudioEncoder` and `TextDecoder` `.mlmodelc` are all present; a failed load from the cache retries once via a fresh download.
 - Default model `openai_whisper-small.en`, overridable via `Settings.whisperModel` (changing it calls `EngineCoordinator.reload`).
 - Load is lazy on launch: 3 attempts w/ backoff, "loading" overlay after a 1s grace.
 
