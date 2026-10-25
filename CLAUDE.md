@@ -50,6 +50,7 @@ Key components (by directory):
 - **First run downloads the model** from HuggingFace (`argmaxinc/whisperkit-coreml`) - needs network once. Subsequent runs are fully offline.
 - Models cache at `~/Documents/huggingface/models/argmaxinc/whisperkit-coreml/<model>/`; `WhisperKitEngine.cachedModelFolder()` reuses it only when `MelSpectrogram`, `AudioEncoder` and `TextDecoder` `.mlmodelc` are all present; a failed load from the cache retries once via a fresh download.
 - Default model `openai_whisper-small.en`, overridable via `Settings.whisperModel` (changing it calls `EngineCoordinator.reload`).
+- Picker: tiny.en, small.en, large-v3-turbo (turbo gets no vocabulary prompt, see `PromptProvider.supportsPrompt`). Retired ids (medium.en, distil-large-v3) stored by older versions map to small.en via `WhisperModels.resolve`.
 - Load is lazy on launch: 3 attempts w/ backoff, "loading" overlay after a 1s grace.
 
 ## Key gotchas

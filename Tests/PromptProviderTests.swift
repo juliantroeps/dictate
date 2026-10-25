@@ -36,10 +36,7 @@ struct PromptProviderTests {
     }
 
     @Test func promptIsKeptForOtherPickerModels() {
-        let models = [
-            "openai_whisper-tiny.en", "openai_whisper-small.en", "openai_whisper-medium.en",
-            "distil-whisper_distil-large-v3_594MB",
-        ]
+        let models = ["openai_whisper-tiny.en", "openai_whisper-small.en"]
         for model in models {
             #expect(PromptProvider.supportsPrompt(model: model), "\(model)")
             #expect(PromptProvider.resolve(forModel: model) != nil, "\(model)")
