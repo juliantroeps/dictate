@@ -5,7 +5,7 @@ struct SettingsView: View {
     struct ModelOption {
         let id: String
         let label: String
-        let memory: String
+        let diskSize: String
     }
 
     private let settings = Settings.shared
@@ -13,10 +13,10 @@ struct SettingsView: View {
     @StateObject private var refreshController = SettingsRefreshController()
 
     private let models: [ModelOption] = [
-        .init(id: "openai_whisper-tiny.en", label: "tiny.en", memory: "~75 MB"),
-        .init(id: "openai_whisper-small.en", label: "small.en", memory: "~500 MB"),
-        .init(id: "openai_whisper-medium.en", label: "medium.en", memory: "~1.5 GB"),
-        .init(id: "distil-whisper_distil-large-v3_594MB", label: "distil-large-v3", memory: "~594 MB"),
+        .init(id: "openai_whisper-tiny.en", label: "tiny.en", diskSize: "~75 MB"),
+        .init(id: "openai_whisper-small.en", label: "small.en", diskSize: "~500 MB"),
+        .init(id: "openai_whisper-medium.en", label: "medium.en", diskSize: "~1.5 GB"),
+        .init(id: "distil-whisper_distil-large-v3_594MB", label: "distil-large-v3", diskSize: "~594 MB"),
     ]
 
     init(engineRuntimeState: DictationRuntimeState) {
@@ -39,7 +39,7 @@ struct SettingsView: View {
 
                 Picker("Model", selection: Bindable(settings).whisperModel) {
                     ForEach(models, id: \.id) { model in
-                        Text("\(model.label)  \(model.memory)").tag(model.id)
+                        Text("\(model.label)  \(model.diskSize) on disk").tag(model.id)
                     }
                 }
 

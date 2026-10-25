@@ -61,6 +61,11 @@ struct MuteController: Sendable {
 
 @MainActor
 final class DictationCoordinator {
+    /// 0.2s at 16kHz. Shorter captures are noise from a press that barely recorded.
+    static let minTranscribableSamples = 3_200
+    /// Peak amplitude (~-46 dBFS) below which a capture is treated as silence.
+    static let silencePeak: Float = 0.005
+
     private let audioCapture: any AudioCapturing
     private let overlay: any OverlayControlling
     private let engineCoordinator: any TranscriptionEngineCoordinating
@@ -295,6 +300,19 @@ final class DictationCoordinator {
         let elapsed = Double(now().uptimeNanoseconds - downTime.uptimeNanoseconds) / 1_000_000_000
         if elapsed < settings.minHoldDuration {
             overlay.hide()
+            return
+        }
+
+        // Whisper hallucinates on (near-)empty audio, and WhisperKit no longer short-circuits
+        // clips under 1s (windowClipTime = 0), so reject them here instead.
+        guard samples.count >= Self.minTranscribableSamples else {
+            AppLogger.transcription.info("Capture too short (\(samples.count) samples); skipping transcription")
+            overlay.hide()
+            return
+        }
+        guard samples.contains(where: { abs($0) >= Self.silencePeak }) else {
+            AppLogger.transcription.info("Capture is silent; skipping transcription")
+            overlay.showInfo("No speech detected", duration: 1.5)
             return
         }
 

@@ -16,7 +16,7 @@ final class FakeAudioCaptureManager: AudioCapturing {
     var onEvent: ((AudioCaptureEvent) -> Void)?
     var startRecordingCalls = 0
     var stopRecordingCalls = 0
-    var capturedSamples: [Float] = [0.1, 0.2, 0.3]
+    var capturedSamples: [Float] = Array(repeating: 0.1, count: DictationCoordinator.minTranscribableSamples)
     var startRecordingError: Error?
     var startRecordingDelay: Duration?
     /// True once startRecording() returns without throwing, false once stopRecording() is called.
@@ -192,5 +192,40 @@ final class FakeMuteController: @unchecked Sendable {
             deviceUID: { [self] id in lock.withLock { _uidsByDevice[id] } },
             deviceID: { [self] uid in lock.withLock { _uidsByDevice.first(where: { $0.value == uid })?.key } }
         )
+    }
+}
+
+/// Wires a `DictationCoordinator` to fakes for tests that only care what key-up does with a capture.
+@MainActor
+final class KeyUpHarness {
+    let audioCapture = FakeAudioCaptureManager()
+    let overlay = FakeOverlayController()
+    let engine = FakeTranscriptionEngineCoordinator()
+    private(set) var injectedTexts: [String] = []
+    private(set) var coordinator: DictationCoordinator!
+    private var currentTime: UInt64 = 1_000_000_000
+
+    init(samples: [Float]) {
+        let settings = FakeDictationSettings()
+        settings.muteSystemAudio = false
+        audioCapture.capturedSamples = samples
+        coordinator = DictationCoordinator(
+            audioCapture: audioCapture,
+            overlay: overlay,
+            engineCoordinator: engine,
+            settings: settings,
+            now: { [unowned self] in DispatchTime(uptimeNanoseconds: self.currentTime) },
+            injectText: { [unowned self] text in
+                self.injectedTexts.append(text)
+                return .injected
+            },
+            hasInjectableTarget: { true }
+        )
+    }
+
+    func holdAndRelease(for seconds: Double = 0.5) {
+        coordinator.handleKeyDown()
+        currentTime += UInt64(seconds * 1_000_000_000)
+        coordinator.handleKeyUp()
     }
 }

@@ -64,12 +64,12 @@ final class Settings {
         let defaults = UserDefaults.standard
 
         defaults.register(defaults: [
-            "whisperModel": "openai_whisper-tiny.en",
+            "whisperModel": "openai_whisper-small.en",
             "noFocusBehavior": NoFocusBehavior.clipboard.rawValue,
             "muteSystemAudio": true,
         ])
 
-        self.whisperModel = defaults.string(forKey: "whisperModel") ?? "openai_whisper-tiny.en"
+        self.whisperModel = defaults.string(forKey: "whisperModel") ?? "openai_whisper-small.en"
         self.noFocusBehavior = NoFocusBehavior(rawValue: defaults.string(forKey: "noFocusBehavior") ?? "") ?? .clipboard
         self.muteSystemAudio = defaults.bool(forKey: "muteSystemAudio")
         self.selectedInputDeviceUID = defaults.string(forKey: "selectedInputDeviceUID")
