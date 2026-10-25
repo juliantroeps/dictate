@@ -41,10 +41,8 @@ final class AudioCaptureManager {
     private var isSettling = false
     // True for the whole span of startRecording(): prevents a config-change
     // notification from calling swapEngine() while performEngineStart is running
-    // engine.start() off-main on that same engine. Without this guard, swapEngine's
-    // off-main teardown (engine.stop()/removeTap on a .utility queue) could run
-    // CONCURRENTLY with engine.start() on the .userInitiated queue - AVAudioEngine is
-    // not thread-safe, so that is a data race, and even if it didn't crash, self.engine
+    // engine.start() off-main on that same engine. Teardown is serialized after the
+    // start on the engine's queue, but without this guard self.engine
     // would already point at a fresh untapped/unstarted engine by the time the await
     // resumes, so flipping isRecording=true would mark a dead engine as recording
     // (silent hot mic, re-arm no-ops via guard !isRecording).
