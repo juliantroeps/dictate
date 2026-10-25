@@ -94,7 +94,11 @@ Running with no config names runs every `*.json` in `eval/configs`, which downlo
 | C3 | C0 after the WhisperKit 1.1.x upgrade | No file: rerun C0 once the package is upgraded |
 | C4a / C4b | `temperatureFallbackCount` 3 / 5 | C0 is 1; 5 is WhisperKit's default |
 | C5a / C5b | large-v3 turbo 547 MB, prompt on / off | WhisperKit 0.15 returns empty with prompt (EOT bug); C5a should show 100% empty |
+| C5c | large-v3 626 MB, prompt off | Non-turbo large-v3 variant |
+| C5d | large-v3 turbo 632 MB, prompt off | Basis for the picker entry: 4.8% nWER, 11/12 terms, p50 0.44 s on 24 real clips |
+| C5e | large-v3 turbo 632 MB, prompt on | Empty on WhisperKit 0.15 (EOT bug); on 1.1.1: 3.4% nWER but p50 0.88 s |
 | C6 | distil-large-v3 + prompt | Not benched yet; may hit the same empty bug |
+| C6b | distil-large-v3, prompt off | |
 | C7 | medium.en + prompt | |
 
 Not covered here: Parakeet (C8) needs an engine behind `TranscriptionEngine` first.
