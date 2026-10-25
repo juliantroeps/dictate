@@ -8,6 +8,10 @@ final class AudioCaptureManager {
     // assert construction never happens on the main thread during a config change.
     private let makeEngine: @Sendable () -> AVAudioEngine
     private var engine: AVAudioEngine
+    // One serial queue per engine: every op touching it (tap install, start, rollback,
+    // teardown) runs here, off main and never concurrently. inputNode lazily creates
+    // the AUHAL unit via sync XPC to coreaudiod, which stalls >2s after wake/device churn.
+    private var engineQueue: DispatchQueue
     private var configChangeObserver: Any?
     // targetFormat is immutable and accessed from the audio tap thread (nonisolated);
     // nonisolated(unsafe) is safe because it is set once in init and never mutated.
@@ -77,6 +81,7 @@ final class AudioCaptureManager {
     init(makeEngine: @escaping @Sendable () -> AVAudioEngine = { AVAudioEngine() }) {
         self.makeEngine = makeEngine
         self.engine = makeEngine()  // initial build on init is fine (no device churn yet)
+        self.engineQueue = Self.makeEngineQueue()
         setupEngineObserver()
         installDefaultInputListener()
     }
@@ -95,17 +100,25 @@ final class AudioCaptureManager {
         // (still-live) tap can fire again and pollute the fresh buffer/converter.
         bumpEpoch()
         let oldEngine = engine
+        let oldQueue = engineQueue
         engine = makeEngine()
+        engineQueue = Self.makeEngineQueue()
         setupEngineObserver()
         converterLock.withLock { converter = nil }
-        tearDownOffMain(oldEngine)
+        tearDownOffMain(oldEngine, on: oldQueue)
     }
 
-    /// Hand the old engine's full teardown to a background queue. removeTap/stop and the
-    /// final dealloc all block on AVFAudio's private queue; off-main they block harmlessly.
-    private func tearDownOffMain(_ oldEngine: AVAudioEngine) {
+    private static func makeEngineQueue() -> DispatchQueue {
+        DispatchQueue(label: "dictate.audio.engine", qos: .userInitiated)
+    }
+
+    /// Hand the old engine's full teardown to its own serial queue (ordered after any
+    /// pending start/rollback on it, separate from the new engine's queue). removeTap/stop
+    /// and the final dealloc all block on AVFAudio's private queue; off-main they block
+    /// harmlessly.
+    private func tearDownOffMain(_ oldEngine: AVAudioEngine, on queue: DispatchQueue) {
         let box = UncheckedSendableBox(oldEngine)
-        DispatchQueue.global(qos: .utility).async {
+        queue.async {
             let engine = box.value
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
@@ -183,30 +196,27 @@ final class AudioCaptureManager {
 
         var lastError: Error = AudioCaptureError.noInputDevice
         for attempt in 1...5 {
-            installRecordingTap()
-
             // A key-up cancel may have landed during the retry-backoff sleep after
             // stopRecording() already no-op'd (isRecording was still false). Bail out
-            // before starting the engine so the mic does not stay hot. handleKeyUp's
+            // before touching the engine so the mic does not stay hot. handleKeyUp's
             // stopRecording() already ran and will not run again.
-            do {
-                try Task.checkCancellation()
-            } catch {
-                engine.inputNode.removeTap(onBus: 0)
-                throw CancellationError()
-            }
+            try Task.checkCancellation()
 
-            // prepare() + the format probe + engine.start() are blocking HAL calls
-            // that can stall while a device is mid-transition (same class of stall
-            // validateFormatStability already documents); run them off main so a
-            // key-press during BT churn does not beachball the UI / delay the tap.
-            let outcome = await performEngineStart(engine)
+            converterLock.withLock { converter = nil }
+            let tap = makeTapBlock()
+            #if DEBUG
+                lastTappedEngine = engine
+            #endif
+
+            // Tap install + prepare() + the format probe + engine.start() are blocking
+            // HAL calls that can stall while a device is mid-transition; run them on the
+            // engine's queue so a key-press during wake/BT churn does not hang main.
+            let outcome = await performEngineStart(engine, on: engineQueue, tap: tap)
 
             if Task.isCancelled, case .started = outcome {
                 // Cancelled while the off-main start was in flight - roll back so a
                 // fast key-up race does not leave the mic hot.
-                engine.stop()
-                engine.inputNode.removeTap(onBus: 0)
+                rollBack(engine, on: engineQueue)
                 throw CancellationError()
             }
 
@@ -216,11 +226,9 @@ final class AudioCaptureManager {
                 AppLogger.audio.info("Recording started (attempt \(attempt))")
                 return
             case .noInputDevice:
-                engine.inputNode.removeTap(onBus: 0)
                 throw AudioCaptureError.noInputDevice
             case .failed(let box):
                 lastError = box.value
-                engine.inputNode.removeTap(onBus: 0)
                 AppLogger.audio.error(
                     "engine.start() failed attempt \(attempt): \(box.value)"
                 )
@@ -244,19 +252,27 @@ final class AudioCaptureManager {
         case failed(UncheckedSendableBox<Error>)
     }
 
-    /// Runs prepare() + the input-format probe + engine.start() off the main actor
-    /// for a single attempt. nonisolated so the dispatch genuinely leaves the main
-    /// executor (an actor-isolated async func would just resume back on MainActor
-    /// without ever running its body elsewhere).
-    nonisolated private func performEngineStart(_ engine: AVAudioEngine) async -> EngineStartOutcome {
+    private typealias TapBlock = @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void
+
+    /// Runs tap install + prepare() + the input-format probe + engine.start() on the
+    /// engine's serial queue for a single attempt; removes the tap again on failure.
+    /// nonisolated so the await genuinely leaves the main executor.
+    nonisolated private func performEngineStart(
+        _ engine: AVAudioEngine, on queue: DispatchQueue, tap: @escaping TapBlock
+    ) async -> EngineStartOutcome {
         let box = UncheckedSendableBox(engine)
         return await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
+            queue.async {
                 let engine = box.value
+                let input = engine.inputNode
+                // Unconditional remove: clears any stale tap before installing a fresh one.
+                input.removeTap(onBus: 0)
+                input.installTap(onBus: 0, bufferSize: 4096, format: nil, block: tap)
                 engine.prepare()
 
-                let hwFormat = engine.inputNode.outputFormat(forBus: 0)
+                let hwFormat = input.outputFormat(forBus: 0)
                 guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
+                    input.removeTap(onBus: 0)
                     continuation.resume(returning: .noInputDevice)
                     return
                 }
@@ -265,32 +281,35 @@ final class AudioCaptureManager {
                     try engine.start()
                     continuation.resume(returning: .started)
                 } catch {
+                    input.removeTap(onBus: 0)
                     continuation.resume(returning: .failed(UncheckedSendableBox(error)))
                 }
             }
         }
     }
 
-    private func installRecordingTap() {
-        converterLock.withLock { converter = nil }
-        // Unconditional remove: clears any stale tap before installing a fresh one.
-        engine.inputNode.removeTap(onBus: 0)
-        // Captured at install time: if swapEngine bumps the epoch before this
-        // closure's engine is torn down, its callbacks fail isCurrentEpoch and are
-        // dropped instead of appending stale-engine samples into the fresh buffer.
+    private func rollBack(_ engine: AVAudioEngine, on queue: DispatchQueue) {
+        let box = UncheckedSendableBox(engine)
+        queue.async {
+            box.value.stop()
+            box.value.inputNode.removeTap(onBus: 0)
+        }
+    }
+
+    /// Built on main so it captures the epoch current at install time: if swapEngine
+    /// bumps the epoch before this tap's engine is torn down, its callbacks fail
+    /// isCurrentEpoch and are dropped instead of appending stale-engine samples.
+    private func makeTapBlock() -> TapBlock {
         let epoch = currentEpoch
         // @Sendable strips the MainActor isolation this closure would otherwise
         // inherit from its enclosing @MainActor context. AVFAudio invokes the tap
         // block on its realtime audio thread; an isolated closure would trap in
         // Swift 6's executor precondition (swift_task_isCurrentExecutor ->
         // dispatch_assert_queue_fail). processAudioBuffer is nonisolated, so this is safe.
-        engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { @Sendable [weak self] pcmBuffer, _ in
+        return { @Sendable [weak self] pcmBuffer, _ in
             guard let self, self.isCurrentEpoch(epoch) else { return }
             self.processAudioBuffer(pcmBuffer)
         }
-        #if DEBUG
-            lastTappedEngine = engine
-        #endif
     }
 
     func stopRecording() -> [Float] {
@@ -465,11 +484,13 @@ final class AudioCaptureManager {
         // device is still transitioning; read it off the main thread on both samples.
         // The completion mutates main-actor state at the call site, so hop back to main
         // before invoking it (off-main completion + MainActor.assumeIsolated -> fatal trap).
+        // Runs on the engine's serial queue so it cannot race a start on the same engine.
         let engineBox = UncheckedSendableBox(engine)
+        let queue = engineQueue
         let validateDelay = self.validateDelay
-        DispatchQueue.global(qos: .userInitiated).async {
+        queue.async {
             let format1 = engineBox.value.inputNode.outputFormat(forBus: 0)
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + validateDelay) {
+            queue.asyncAfter(deadline: .now() + validateDelay) {
                 let format2 = engineBox.value.inputNode.outputFormat(forBus: 0)
                 let stable =
                     format1.sampleRate == format2.sampleRate && format1.channelCount == format2.channelCount
