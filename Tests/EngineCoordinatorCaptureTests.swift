@@ -24,6 +24,7 @@ struct EngineCoordinatorCaptureTests {
     }
 
     /// Saving is fire-and-forget off the main actor, so wait for the sidecar to appear.
+    @MainActor
     private func waitForSidecar(in directory: URL) async throws -> [String: Any] {
         for _ in 0..<200 {
             let files = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
@@ -66,9 +67,10 @@ struct EngineCoordinatorCaptureTests {
         engine.transcribeError = Boom()
         let coordinator = makeCoordinator(engine: engine, directory: dir)
 
-        await #expect(throws: Boom.self) {
-            try await coordinator.transcribe(audioSamples: [0.1, 0.2])
-        }
+        do {
+            _ = try await coordinator.transcribe(audioSamples: [0.1, 0.2])
+            Issue.record("expected transcribe to throw")
+        } catch is Boom {}
 
         let sidecar = try await waitForSidecar(in: dir)
         #expect(sidecar["hypothesis"] == nil)

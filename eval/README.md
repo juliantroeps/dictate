@@ -26,7 +26,11 @@ Real dictations beat synthetic ones. Run the app with captures on (off by defaul
 DICTATE_SAVE_CAPTURES=1 .build/debug/dictate
 ```
 
-Every dictation (also empty results and failures) is saved to `~/.dictate/captures/` as `<stamp>.wav` (exact
+For a release build use the binary inside the bundle, with the menu bar instance quit
+(`DICTATE_SAVE_CAPTURES=1 dist/Dictate.app/Contents/MacOS/dictate`). Like any run from Terminal, this needs the
+Accessibility grant on the terminal, and only builds that contain this feature honor the flag.
+
+Every dictation (also empty results and errors; not a wedged engine that never returns) is saved to `~/.dictate/captures/` as `<stamp>.wav` (exact
 `[Float]` handed to `transcribe()`, 32-bit float) plus `<stamp>.json` (input device, Bluetooth flag, model,
 the app's hypothesis, error). Dictate normally for a while, then pick 25-30 clips. Aim for: at least 3 clips
 under 1.5 s, 3-10 s, 15-30 s, jargon-heavy, quiet/noisy, and a few on Bluetooth.

@@ -51,7 +51,7 @@ final class EngineCoordinator: TranscriptionEngineCoordinating {
         engineFactory: @escaping (String) -> TranscriptionEngine = { WhisperKitEngine(model: $0) },
         retryDelay: @escaping (Int) -> Duration = { .seconds(Double($0) * 2) },
         captureRecorder: CaptureRecorder? = CaptureRecorder.fromEnvironment(),
-        captureDevice: @escaping @MainActor () -> CaptureRecorder.InputDevice = CaptureRecorder.systemInputDevice
+        captureDevice: @escaping @MainActor () -> CaptureRecorder.InputDevice = { CaptureRecorder.systemInputDevice() }
     ) {
         self.settings = settings
         self.overlay = overlay
@@ -79,8 +79,9 @@ final class EngineCoordinator: TranscriptionEngineCoordinating {
     }
 
     func transcribe(audioSamples: [Float]) async throws -> String {
-        // Single choke point for key-up, interrupted and buffered dictations. Failures and
-        // empty results are recorded too: those are the clips the eval corpus needs most.
+        // Single choke point for key-up, interrupted and buffered dictations. Empty results and
+        // thrown errors (incl. cancellation after a timeout) are recorded too: those are the clips
+        // the eval corpus needs most. A wedged engine that never returns cannot be recorded.
         guard let captureRecorder else {
             return try await engine.transcribe(audioSamples: audioSamples)
         }
