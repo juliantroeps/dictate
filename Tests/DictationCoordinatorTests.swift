@@ -43,6 +43,43 @@ struct DictationCoordinatorTests {
     }
 
     @Test @MainActor
+    func tooShortCaptureSkipsTranscriptionWithoutPill() {
+        let h = KeyUpHarness(samples: Array(repeating: 0.1, count: DictationCoordinator.minTranscribableSamples - 1))
+
+        h.holdAndRelease()
+
+        #expect(h.engine.transcribeInputs.isEmpty)
+        #expect(h.engine.prepareAttempts.isEmpty)
+        #expect(h.injectedTexts.isEmpty)
+        #expect(h.overlay.shownInfos.isEmpty)
+        #expect(h.overlay.state.phase == .idle)
+    }
+
+    @Test @MainActor
+    func silentCaptureSkipsTranscriptionAndShowsInfo() {
+        let h = KeyUpHarness(samples: Array(repeating: 0.001, count: 16_000))
+
+        h.holdAndRelease()
+
+        #expect(h.engine.transcribeInputs.isEmpty)
+        #expect(h.engine.prepareAttempts.isEmpty)
+        #expect(h.injectedTexts.isEmpty)
+        #expect(h.overlay.shownInfos == ["No speech detected"])
+    }
+
+    @Test @MainActor
+    func quietCaptureAtSilenceThresholdStillTranscribes() async {
+        let h = KeyUpHarness(samples: Array(repeating: DictationCoordinator.silencePeak, count: 16_000))
+
+        h.holdAndRelease()
+        await h.coordinator.runtimeState.transcriptionTask?.value
+
+        #expect(h.engine.transcribeInputs.count == 1)
+        #expect(h.injectedTexts == ["transcribed text"])
+        #expect(h.overlay.shownInfos.isEmpty)
+    }
+
+    @Test @MainActor
     func engineNotReadyBuffersSamplesAndTriggersPrepare() {
         let settings = FakeDictationSettings()
         settings.minHoldDuration = 0.1

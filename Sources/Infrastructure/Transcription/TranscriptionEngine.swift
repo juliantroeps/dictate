@@ -100,6 +100,11 @@ actor WhisperKitEngine: TranscriptionEngine {
         // 3-5x slow dictations. Keep these conservative, not zero.
         options.withoutTimestamps = true
         options.temperatureFallbackCount = 1
+        // WhisperKit's default windowClipTime (1.0s) makes its decode loop
+        // (`seek < end - windowClipTime`) skip clips of 1s or less, returning "".
+        // DictationCoordinator already gates empty/silent captures, so the extra
+        // end-of-clip hallucination guard isn't worth dropping short dictations.
+        options.windowClipTime = 0
 
         #if DEBUG
             let start = Date()
