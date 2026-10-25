@@ -140,6 +140,8 @@ echo "Your custom vocabulary here." > ~/.dictate/prompt.txt
 
 The file is read once at engine load time. Restart the app or change the model to pick up edits. Max 224 tokens.
 
+Hints are not used with `large-v3-turbo`: WhisperKit 0.15 returns empty text for that model family when prompted. It is faster than `small.en` in testing but reproduces rare names less reliably.
+
 ## Release
 
 
