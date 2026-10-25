@@ -29,7 +29,7 @@ actor WhisperKitEngine: TranscriptionEngine {
     nonisolated(unsafe) private var _isReady = false
     nonisolated var isReady: Bool { readyLock.withLock { _isReady } }
 
-    init(model: String = "openai_whisper-tiny.en") {
+    init(model: String = "openai_whisper-small.en") {
         self.model = model
     }
 

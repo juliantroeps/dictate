@@ -98,7 +98,7 @@ Click the mic icon in the menu bar to open settings.
 
 | Setting           | Default           | Description                                                 |
 | ----------------- | ----------------- | ----------------------------------------------------------- |
-| Model             | tiny.en (~75 MB)  | Whisper model size. Larger = more accurate, slower to load and takes up more RAM. |
+| Model             | small.en (~500 MB on disk) | Whisper model size. Larger = more accurate, slower to load and takes up more RAM. |
 | No text field     | Copy to clipboard | Fallback when no focused text field is found.               |
 | Mute system audio | On                | Mutes speaker output while recording.                       |
 
