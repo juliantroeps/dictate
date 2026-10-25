@@ -38,7 +38,7 @@ Key components (by directory):
 - `Infrastructure/Input/` - `KeyListener` (CGEventTap on `flagsChanged` for Fn/Globe `maskSecondaryFn`; a11y on the *terminal*, not the binary), `TextInjector` (+ `TextInjectionHelpers`): 3-strategy cascade AXSelectedText splice -> AXValue splice -> clipboard+Cmd+V, cursor verification catches apps that silently ignore AX writes (terminals, Electron); `PasteReceipt` (lazy pasteboard promise: consumer read = paste landed, restore prior clipboard; no read = keep dictation; "Copied to clipboard" pill on the no-target branch only)
 - `Infrastructure/Audio/` - `AudioCaptureManager` (AVAudioEngine tap -> 16kHz mono Float32), `AudioDeviceCoordinator`/`AudioDevicePolicy`/`AudioCaptureEvent` (mid-recording device-change handling), `SystemAudioController` (CoreAudio mute/unmute default output)
 - `Infrastructure/Transcription/` - `EngineCoordinator` (also the `DICTATE_SAVE_CAPTURES=1` hook: saves every `transcribe()` input via `Infrastructure/Audio/CaptureRecorder` to `~/.dictate/captures/` as float32 WAV + JSON sidecar; off by default, local only)
-- `DictateCore/` - `TranscriptionEngine` protocol + `WhisperKitEngine` (pinned `0.9.0..<0.16.0`; 0.16.0 broken on macOS 15 SDK; `WhisperKitEngine.decodingOptions` is the single source of the app's decode options, reused by the eval), `PromptProvider` (vocabulary hints from `~/.dictate/prompt.txt`), `AppLogger` (Sentry plugged in via `AppLogger.setReporter` from `SentryConfiguration.start`)
+- `DictateCore/` - `TranscriptionEngine` protocol + `WhisperKitEngine` (argmax-oss-swift `1.1.x`, `upToNextMinor`; `WhisperKitEngine.decodingOptions` is the single source of the app's decode options, reused by the eval), `PromptProvider` (vocabulary hints from `~/.dictate/prompt.txt`), `AppLogger` (Sentry plugged in via `AppLogger.setReporter` from `SentryConfiguration.start`)
 - `dictate-eval/` - offline eval CLI: `NNN.wav` + `NNN.ref.txt` x `eval/configs/*.json` -> `results.csv` + `summary.md` (WER, term recall, empty/halluc rate, latency). `eval/` is gitignored except README, configs, terms.example.txt
 - `Infrastructure/Permissions/` - `AccessibilityPermission`, `MicrophonePermission`
 - `Support/` - `AppLogger`, `Settings` (`@Observable` singleton backed by UserDefaults)
@@ -56,7 +56,7 @@ Key components (by directory):
 
 - **Accessibility permission** must be granted to Terminal.app (or whichever terminal), not to the compiled binary
 - **`swift run` invalidates TCC** - always `swift build` then run binary directly
-- **WhisperKit 0.16.0** uses `MLMultiArrayDataType.int8` requiring macOS 26 SDK - hence the upper bound pin
+- **argmax-oss-swift 1.1.x** guards `MLMultiArrayDataType.int8` with `#if compiler(>=6.2)`, but `.int8` needs the macOS 26 SDK. A 6.2 compiler on a macOS 15 SDK (e.g. swiftly 6.2.3 + Xcode 16.0) fails to build (`.int8` missing, `mach_task_self_` not concurrency-safe). Use Swift 6.1.x (Xcode 16.3+) or Xcode 26. `Tests/` use trailing commas in calls: need Swift 6.1+
 - **`AVAudioApplication.requestRecordPermission()`** crashes on macOS 15 with Swift 6 async/await - use ObjC-style callback (`AVCaptureDevice.requestAccess(for:) { granted in ... }`)
 - **`@MainActor` + Timer callbacks** - use `MainActor.assumeIsolated` instead of async bridging
 - Overlay window uses `.screenSaver` level + `.fullScreenAuxiliary` collection behavior to appear above full-screen apps

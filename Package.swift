@@ -6,7 +6,7 @@ let package = Package(
     name: "dictate",
     platforms: [.macOS(.v14)],
     dependencies: [
-        .package(url: "https://github.com/argmaxinc/WhisperKit.git", "0.9.0"..<"0.16.0"),
+        .package(url: "https://github.com/argmaxinc/argmax-oss-swift.git", .upToNextMinor(from: "1.1.1")),
         .package(url: "https://github.com/getsentry/sentry-cocoa", from: "9.17.1"),
     ],
     targets: [
@@ -14,7 +14,7 @@ let package = Package(
         // must not depend on Sentry or any UI.
         .target(
             name: "DictateCore",
-            dependencies: ["WhisperKit"],
+            dependencies: [.product(name: "WhisperKit", package: "argmax-oss-swift")],
             path: "Sources/DictateCore"
         ),
         .executableTarget(
@@ -29,12 +29,12 @@ let package = Package(
         // Offline transcription eval harness (see eval/README.md).
         .executableTarget(
             name: "dictate-eval",
-            dependencies: ["DictateCore", "WhisperKit"],
+            dependencies: ["DictateCore", .product(name: "WhisperKit", package: "argmax-oss-swift")],
             path: "Sources/dictate-eval"
         ),
         .testTarget(
             name: "dictateTests",
-            dependencies: ["dictate", "DictateCore", "dictate-eval", "WhisperKit"],
+            dependencies: ["dictate", "DictateCore", "dictate-eval", .product(name: "WhisperKit", package: "argmax-oss-swift")],
             path: "Tests"
         ),
     ]
