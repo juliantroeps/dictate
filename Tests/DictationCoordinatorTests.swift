@@ -1602,7 +1602,8 @@ struct DictationCoordinatorTests {
             injectText: {
                 injected.append($0)
                 return .pasted
-            }
+            },
+            hasInjectableTarget: { true }
         )
 
         coordinator.handleKeyDown()
