@@ -72,6 +72,7 @@ final class DictationCoordinator {
     private let settings: any DictationSettingsProviding
     private let now: () -> DispatchTime
     private let transcriptionTimeout: Duration
+    private let transcriptionTimeoutPerAudioSecond: Double
     private let injectText: @MainActor (String) -> TextInjector.Result
     private let hasInjectableTarget: @MainActor () -> Bool
     /// Pastes with a pasteboard receipt; true when the paste was consumed (no pill needed).
@@ -91,6 +92,7 @@ final class DictationCoordinator {
         runtimeState: DictationRuntimeState = DictationRuntimeState(),
         now: @escaping () -> DispatchTime = DispatchTime.now,
         transcriptionTimeout: Duration = .seconds(30),
+        transcriptionTimeoutPerAudioSecond: Double = 4,
         injectText: @escaping @MainActor (String) -> TextInjector.Result = TextInjector.inject,
         hasInjectableTarget: @escaping @MainActor () -> Bool = TextInjector.hasInjectableTarget,
         pasteWithReceipt: @escaping @MainActor (String) async -> Bool = { await TextInjector.pasteWithReceipt($0) },
@@ -103,6 +105,7 @@ final class DictationCoordinator {
         self.runtimeState = runtimeState
         self.now = now
         self.transcriptionTimeout = transcriptionTimeout
+        self.transcriptionTimeoutPerAudioSecond = transcriptionTimeoutPerAudioSecond
         self.injectText = injectText
         self.hasInjectableTarget = hasInjectableTarget
         self.pasteWithReceipt = pasteWithReceipt
@@ -126,18 +129,16 @@ final class DictationCoordinator {
     }
 
     /// Recover a mute left over from a previous crash/force-quit that killed the
-    /// process mid-hold. Resolves the persisted device UID so this survives that
-    /// device having disappeared (or a different default output at this launch);
-    /// falls back to unmuting the current default output device. Always clears the
-    /// persisted record so a stale/unresolvable UID cannot wedge future launches.
+    /// process mid-hold. No-ops when nothing was persisted. Resolves the persisted
+    /// device UID so this survives that device having disappeared (or a different
+    /// default output at this launch); a persisted-but-unresolvable UID falls back
+    /// to unmuting the current default output device. Always clears the persisted
+    /// record so a stale UID cannot wedge future launches.
     /// SIGKILL cannot be caught; launch is the only recovery path for that scenario.
     func recoverPersistedMuteOnLaunch() {
+        guard let uid = settings.activeMuteDeviceUID else { return }
         defer { settings.activeMuteDeviceUID = nil }
-        if let uid = settings.activeMuteDeviceUID, let deviceID = muteController.deviceID(uid) {
-            muteController.setMuted(false, deviceID)
-            return
-        }
-        if let deviceID = muteController.currentDeviceID() {
+        if let deviceID = muteController.deviceID(uid) ?? muteController.currentDeviceID() {
             muteController.setMuted(false, deviceID)
         }
     }
@@ -373,6 +374,12 @@ final class DictationCoordinator {
         startTranscription(samples: samples, logLabel: "interrupted dictation")
     }
 
+    /// Scales with clip length so long dictations on slower models aren't dropped
+    /// (and the engine needlessly reloaded) by the fixed floor.
+    static func timeout(floor: Duration, sampleCount: Int, perAudioSecond: Double) -> Duration {
+        max(floor, .seconds(Double(sampleCount) / 16_000 * perAudioSecond))
+    }
+
     /// Spawn a transcription task, guarded by a generation token so that a
     /// late-resuming cancelled task cannot stomp the phase/overlay of a newer
     /// session and cannot drop the newer session's cancel handle.
@@ -387,7 +394,10 @@ final class DictationCoordinator {
         let hasInjectableTarget = self.hasInjectableTarget
         let pasteWithReceipt = self.pasteWithReceipt
         let runtimeState = self.runtimeState
-        let transcriptionTimeout = self.transcriptionTimeout
+        let transcriptionTimeout = Self.timeout(
+            floor: self.transcriptionTimeout,
+            sampleCount: samples.count,
+            perAudioSecond: transcriptionTimeoutPerAudioSecond)
 
         let task = Task { @MainActor in
             defer {
