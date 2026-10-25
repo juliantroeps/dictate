@@ -23,6 +23,8 @@ VERSION=x.y.z scripts/package.sh   # build + sign + DMG in dist/ (bundles instal
 scripts/tag-release.sh              # commit, tag, push, gh release
 ```
 
+`package.sh` uploads `dist/dictate.dSYM` to Sentry if `sentry-cli` + `SENTRY_AUTH_TOKEN`/`SENTRY_ORG`/`SENTRY_PROJECT` are set (else warns and skips).
+
 `scripts/install.sh` is bundled into the DMG for end-user installation. It copies the app to `/Applications`, strips quarantine, and ejects the DMG.
 
 ## Architecture
