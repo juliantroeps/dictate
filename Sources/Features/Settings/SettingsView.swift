@@ -1,4 +1,5 @@
 import CoreAudio
+import DictateCore
 import SwiftUI
 
 struct SettingsView: View {
@@ -15,8 +16,7 @@ struct SettingsView: View {
     private let models: [ModelOption] = [
         .init(id: "openai_whisper-tiny.en", label: "tiny.en", diskSize: "~75 MB"),
         .init(id: "openai_whisper-small.en", label: "small.en", diskSize: "~500 MB"),
-        .init(id: "openai_whisper-medium.en", label: "medium.en", diskSize: "~1.5 GB"),
-        .init(id: "distil-whisper_distil-large-v3_594MB", label: "distil-large-v3", diskSize: "~594 MB"),
+        .init(id: "openai_whisper-large-v3-v20240930_turbo_632MB", label: "large-v3-turbo", diskSize: "~650 MB"),
     ]
 
     init(engineRuntimeState: DictationRuntimeState) {
@@ -41,6 +41,11 @@ struct SettingsView: View {
                     ForEach(models, id: \.id) { model in
                         Text("\(model.label)  \(model.diskSize) on disk").tag(model.id)
                     }
+                }
+
+                if !PromptProvider.supportsPrompt(model: settings.whisperModel) {
+                    Text("Vocabulary hints are not used with this model.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
 
                 switch engineRuntimeState.engineStatus {

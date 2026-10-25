@@ -65,16 +65,34 @@ final class Settings {
         let defaults = UserDefaults.standard
 
         defaults.register(defaults: [
-            "whisperModel": "openai_whisper-small.en",
+            "whisperModel": WhisperModels.defaultID,
             "noFocusBehavior": NoFocusBehavior.clipboard.rawValue,
             "muteSystemAudio": true,
         ])
 
-        self.whisperModel = defaults.string(forKey: "whisperModel") ?? "openai_whisper-small.en"
+        let storedModel = defaults.string(forKey: "whisperModel")
+        let model = WhisperModels.resolve(stored: storedModel)
+        if model != storedModel { defaults.set(model, forKey: "whisperModel") }
+        self.whisperModel = model
         self.noFocusBehavior = NoFocusBehavior(rawValue: defaults.string(forKey: "noFocusBehavior") ?? "") ?? .clipboard
         self.muteSystemAudio = defaults.bool(forKey: "muteSystemAudio")
         self.selectedInputDeviceUID = defaults.string(forKey: "selectedInputDeviceUID")
         self.activeMuteDeviceUID = defaults.string(forKey: "activeMuteDeviceUID")
+    }
+}
+
+enum WhisperModels {
+    static let defaultID = "openai_whisper-small.en"
+
+    /// Models removed from the picker; a stored selection falls back to the default.
+    private static let retired: Set<String> = [
+        "openai_whisper-medium.en",
+        "distil-whisper_distil-large-v3_594MB",
+    ]
+
+    static func resolve(stored: String?) -> String {
+        guard let stored, !retired.contains(stored) else { return defaultID }
+        return stored
     }
 }
 

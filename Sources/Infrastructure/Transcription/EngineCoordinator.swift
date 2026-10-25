@@ -48,7 +48,9 @@ final class EngineCoordinator: TranscriptionEngineCoordinating {
         overlay: any OverlayControlling = OverlayController(),
         runtimeState: DictationRuntimeState = DictationRuntimeState(),
         engine: TranscriptionEngine? = nil,
-        engineFactory: @escaping (String) -> TranscriptionEngine = { WhisperKitEngine(model: $0) },
+        engineFactory: @escaping (String) -> TranscriptionEngine = { model in
+            WhisperKitEngine(model: model, prompt: { PromptProvider.resolve(forModel: model) })
+        },
         retryDelay: @escaping (Int) -> Duration = { .seconds(Double($0) * 2) },
         captureRecorder: CaptureRecorder? = CaptureRecorder.fromEnvironment(),
         captureDevice: @escaping @MainActor () -> CaptureRecorder.InputDevice = { CaptureRecorder.systemInputDevice() }

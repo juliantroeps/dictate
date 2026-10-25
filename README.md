@@ -9,7 +9,7 @@ Transcription runs entirely on-device via [WhisperKit](https://github.com/argmax
 ## Features
 
 - Hold-to-record from anywhere
-- On-device transcription (Whisper tiny/base/small/medium)
+- On-device transcription (Whisper tiny.en, small.en, large-v3-turbo)
 - Smart text injection - works in browsers, terminals, Electron apps, and native apps
 - System audio mute while recording
 - Customizable vocabulary hints for domain-specific terminology
@@ -106,7 +106,7 @@ Click the mic icon in the menu bar to open settings.
 
 | Setting           | Default           | Description                                                 |
 | ----------------- | ----------------- | ----------------------------------------------------------- |
-| Model             | small.en (~500 MB on disk) | Whisper model size. Larger = more accurate, slower to load and takes up more RAM. |
+| Model             | small.en (~500 MB on disk) | tiny.en (fastest, least accurate), small.en, or large-v3-turbo (~650 MB, faster than small.en in testing, no vocabulary hints). |
 | No text field     | Copy to clipboard | Fallback when no focused text field is found.               |
 | Mute system audio | On                | Mutes speaker output while recording.                       |
 
@@ -139,6 +139,8 @@ echo "Your custom vocabulary here." > ~/.dictate/prompt.txt
 ```
 
 The file is read once at engine load time. Restart the app or change the model to pick up edits. Max 224 tokens.
+
+Hints are not used with `large-v3-turbo`: WhisperKit 0.15 returns empty text for that model family when prompted. It is faster than `small.en` in testing but reproduces rare names less reliably.
 
 ## Release
 

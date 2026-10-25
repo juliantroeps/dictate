@@ -29,6 +29,20 @@ struct PromptProviderTests {
         #expect(PromptProvider.resolve(from: promptURL) == PromptProvider.defaultPrompt)
     }
 
+    @Test func promptIsSkippedForTurboFamily() {
+        let turbo = "openai_whisper-large-v3-v20240930_turbo_632MB"
+        #expect(!PromptProvider.supportsPrompt(model: turbo))
+        #expect(PromptProvider.resolve(forModel: turbo) == nil)
+    }
+
+    @Test func promptIsKeptForOtherPickerModels() {
+        let models = ["openai_whisper-tiny.en", "openai_whisper-small.en"]
+        for model in models {
+            #expect(PromptProvider.supportsPrompt(model: model), "\(model)")
+            #expect(PromptProvider.resolve(forModel: model) != nil, "\(model)")
+        }
+    }
+
     @Test func defaultPromptFixedAndTrimmed() {
         #expect(!PromptProvider.defaultPrompt.contains("MonogDB"))
         #expect(PromptProvider.defaultPrompt.contains("MongoDB"))
