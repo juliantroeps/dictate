@@ -72,10 +72,10 @@ struct ClipboardRestorer {
 
 enum AXMessaging {
     /// A hung target app otherwise blocks each AX call ~6 s, and this runs on main
-    /// (the same run loop as the event tap). Per element; also set on the app element.
+    /// (the same run loop as the event tap). Set per element; on the system-wide
+    /// element it becomes the process-wide default.
     static let timeout: Float = 0.5
 
-    @discardableResult
     static func bounded(_ element: AXUIElement) -> AXUIElement {
         AXUIElementSetMessagingTimeout(element, timeout)
         return element

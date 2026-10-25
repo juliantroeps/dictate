@@ -46,6 +46,9 @@ actor WhisperKitEngine: TranscriptionEngine {
             config.modelFolder = cached
             do {
                 wk = try await WhisperKit(config)
+            } catch let cancellation as CancellationError {
+                // Superseded load (model change / recover): do not start a download for it.
+                throw cancellation
             } catch {
                 // Corrupt/partial cache: retry once letting WhisperKit re-download.
                 AppLogger.transcription.warning("Cached model load failed (\(error)); retrying with fresh download")
