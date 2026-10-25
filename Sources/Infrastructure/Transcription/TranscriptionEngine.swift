@@ -40,11 +40,21 @@ actor WhisperKitEngine: TranscriptionEngine {
         // load (already covered by the loading pill) instead of the first
         // transcribe call.
         let config = WhisperKitConfig(model: self.model, prewarm: true, load: true)
+        let wk: WhisperKit
         if let cached = cachedModelFolder() {
             AppLogger.transcription.debug("Using cached WhisperKit model folder")
             config.modelFolder = cached
+            do {
+                wk = try await WhisperKit(config)
+            } catch {
+                // Corrupt/partial cache: retry once letting WhisperKit re-download.
+                AppLogger.transcription.warning("Cached model load failed (\(error)); retrying with fresh download")
+                config.modelFolder = nil
+                wk = try await WhisperKit(config)
+            }
+        } else {
+            wk = try await WhisperKit(config)
         }
-        let wk = try await WhisperKit(config)
         whisperKit = wk
 
         if let tokenizer = wk.tokenizer {
@@ -70,18 +80,24 @@ actor WhisperKitEngine: TranscriptionEngine {
         readyLock.withLock { _isReady = false }
     }
 
+    /// Compiled models WhisperKit needs to load; a folder missing any is a partial download.
+    static let requiredModelBundles = ["MelSpectrogram.mlmodelc", "AudioEncoder.mlmodelc", "TextDecoder.mlmodelc"]
+
     private func cachedModelFolder() -> String? {
         guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
             return nil
         }
         let path = docs.appendingPathComponent("huggingface/models/argmaxinc/whisperkit-coreml/\(model)")
+        return Self.isCompleteModelFolder(path.path) ? path.path : nil
+    }
+
+    static func isCompleteModelFolder(_ path: String) -> Bool {
         var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path.path, isDirectory: &isDir), isDir.boolValue else {
-            return nil
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else {
+            return false
         }
-        let contents = (try? FileManager.default.contentsOfDirectory(atPath: path.path)) ?? []
-        guard contents.contains(where: { $0.hasSuffix(".mlmodelc") }) else { return nil }
-        return path.path
+        let contents = Set((try? FileManager.default.contentsOfDirectory(atPath: path)) ?? [])
+        return requiredModelBundles.allSatisfy(contents.contains)
     }
 
     func transcribe(audioSamples: [Float]) async throws -> String {
