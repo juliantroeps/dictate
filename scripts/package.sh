@@ -9,6 +9,17 @@ NOTARY_PROFILE="${NOTARY_PROFILE:-notarytool-profile}"
 scripts/build.sh
 scripts/sign.sh "$APP"
 
+# Upload dSYM to Sentry (optional; needs sentry-cli + SENTRY_AUTH_TOKEN/ORG/PROJECT in env)
+DSYM="dist/dictate.dSYM"
+if ! command -v sentry-cli &>/dev/null; then
+    echo "Warning: sentry-cli not found, skipping dSYM upload"
+elif [ -z "${SENTRY_AUTH_TOKEN:-}" ] || [ -z "${SENTRY_ORG:-}" ] || [ -z "${SENTRY_PROJECT:-}" ]; then
+    echo "Warning: SENTRY_AUTH_TOKEN/SENTRY_ORG/SENTRY_PROJECT not set, skipping dSYM upload"
+elif ! sentry-cli debug-files upload --include-sources \
+    -o "$SENTRY_ORG" -p "$SENTRY_PROJECT" "$DSYM"; then
+    echo "Warning: dSYM upload failed, continuing"
+fi
+
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist")
 DMG="dist/Dictate-${VERSION}.dmg"
 

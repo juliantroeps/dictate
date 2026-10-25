@@ -249,6 +249,7 @@ final class DictationCoordinator {
         // Discard any stale pending buffer from a prior not-ready key-up - a fresh
         // session starting means we'll capture new audio from scratch.
         runtimeState.pendingSamples = nil
+        runtimeState.heldSamples = []
 
         runtimeState.keyDownTime = now()
         overlay.state.phase = .recording
@@ -289,19 +290,23 @@ final class DictationCoordinator {
 
         restoreMuteIfNeeded()
 
-        let samples = audioCapture.stopRecording()
+        let held = runtimeState.heldSamples
+        runtimeState.heldSamples = []
+        let samples = held + audioCapture.stopRecording()
 
-        guard let downTime = runtimeState.keyDownTime else {
+        if let downTime = runtimeState.keyDownTime {
+            runtimeState.keyDownTime = nil
+            // The hold-duration gate applies to the whole hold; with held audio from
+            // before an interruption, the hold already passed it.
+            let elapsed = Double(now().uptimeNanoseconds - downTime.uptimeNanoseconds) / 1_000_000_000
+            if held.isEmpty, elapsed < settings.minHoldDuration {
+                overlay.hide()
+                return
+            }
+        } else if held.isEmpty {
             if case .recording = overlay.state.phase {
                 overlay.hide()
             }
-            return
-        }
-        runtimeState.keyDownTime = nil
-
-        let elapsed = Double(now().uptimeNanoseconds - downTime.uptimeNanoseconds) / 1_000_000_000
-        if elapsed < settings.minHoldDuration {
-            overlay.hide()
             return
         }
 
@@ -349,6 +354,15 @@ final class DictationCoordinator {
         runtimeState.transcriptionTask?.cancel()
         runtimeState.transcriptionTask = nil
         runtimeState.transcriptionGeneration += 1
+
+        // Still holding: keep the audio and wait for the re-armed capture, so key-up
+        // transcribes and pastes the whole hold once. Pasting now would fire Cmd+V
+        // while Fn is down, which apps may ignore.
+        if runtimeState.keyHeld {
+            runtimeState.heldSamples += samples
+            AppLogger.audio.info("Recording interrupted while held; keeping \(samples.count) samples for key-up")
+            return
+        }
 
         let minSamples = Int(settings.minHoldDuration * 16000)
         guard samples.count >= minSamples else {

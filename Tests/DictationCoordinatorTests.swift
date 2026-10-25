@@ -1272,12 +1272,105 @@ struct DictationCoordinatorTests {
         // keyHeld still true at this point
         #expect(coordinator.runtimeState.keyHeld == true)
 
-        // User releases key
+        // User releases key. No restart happened, so the real manager has nothing left.
+        audioCapture.capturedSamples = []
         coordinator.handleKeyUp()
         #expect(coordinator.runtimeState.keyHeld == false)
         #expect(overlay.state.phase == .idle)
         // No extra transcription from the short interrupted segment
         #expect(injectedTexts.isEmpty)
+    }
+
+    @Test @MainActor
+    func interruptionWhileHeld_transcribesWholeHoldOnceAtKeyUp() async {
+        let settings = FakeDictationSettings()
+        settings.minHoldDuration = 0.1
+        settings.muteSystemAudio = false
+
+        var currentTime: UInt64 = 1_000_000_000
+        let audioCapture = FakeAudioCaptureManager()
+        let overlay = FakeOverlayController()
+        let engine = FakeTranscriptionEngineCoordinator()
+        engine.isReady = true
+        var injectedTexts: [String] = []
+
+        let coordinator = DictationCoordinator(
+            audioCapture: audioCapture,
+            overlay: overlay,
+            engineCoordinator: engine,
+            settings: settings,
+            now: { DispatchTime(uptimeNanoseconds: currentTime) },
+            injectText: { text in
+                injectedTexts.append(text)
+                return .injected
+            },
+            hasInjectableTarget: { true }
+        )
+
+        coordinator.handleKeyDown()
+        await coordinator.runtimeState.recordingStartTask?.value
+        currentTime += 2_000_000_000
+
+        let firstPart = [Float](repeating: 0.2, count: 4_000)
+        coordinator.handleRecordingInterrupted(samples: firstPart)
+
+        // Held: nothing transcribed or pasted mid-hold, overlay keeps recording.
+        #expect(engine.transcribeInputs.isEmpty)
+        #expect(coordinator.runtimeState.transcriptionTask == nil)
+        #expect(overlay.state.phase == .recording)
+
+        coordinator.handleAudioCaptureEvent(.inputConfigurationChanged(stable: true))
+        await coordinator.runtimeState.recordingStartTask?.value
+
+        // Short continuation: still transcribed, since the hold as a whole passed the gate.
+        currentTime += 50_000_000
+        let secondPart = [Float](repeating: 0.3, count: 3_200)
+        audioCapture.capturedSamples = secondPart
+        coordinator.handleKeyUp()
+        await coordinator.runtimeState.transcriptionTask?.value
+
+        #expect(engine.transcribeInputs == [firstPart + secondPart])
+        #expect(injectedTexts == ["transcribed text"])
+        #expect(coordinator.runtimeState.heldSamples.isEmpty)
+    }
+
+    @Test @MainActor
+    func interruptionWhileHeldWithoutRestart_transcribesHeldAudioAtKeyUp() async {
+        let settings = FakeDictationSettings()
+        settings.minHoldDuration = 0.1
+        settings.muteSystemAudio = false
+
+        let audioCapture = FakeAudioCaptureManager()
+        let overlay = FakeOverlayController()
+        let engine = FakeTranscriptionEngineCoordinator()
+        engine.isReady = true
+        var injectedTexts: [String] = []
+
+        let coordinator = DictationCoordinator(
+            audioCapture: audioCapture,
+            overlay: overlay,
+            engineCoordinator: engine,
+            settings: settings,
+            injectText: { text in
+                injectedTexts.append(text)
+                return .injected
+            },
+            hasInjectableTarget: { true }
+        )
+
+        coordinator.handleKeyDown()
+        await coordinator.runtimeState.recordingStartTask?.value
+
+        let firstPart = [Float](repeating: 0.2, count: 4_000)
+        coordinator.handleRecordingInterrupted(samples: firstPart)
+
+        // Re-arm never happened (unstable config); key-up must not lose the held audio.
+        audioCapture.capturedSamples = []
+        coordinator.handleKeyUp()
+        await coordinator.runtimeState.transcriptionTask?.value
+
+        #expect(engine.transcribeInputs == [firstPart])
+        #expect(injectedTexts == ["transcribed text"])
     }
 
     @Test @MainActor

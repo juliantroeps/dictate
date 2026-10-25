@@ -39,4 +39,8 @@ final class DictationRuntimeState {
     /// engine finishes loading. A newer key-up overwrites an older pending buffer
     /// (newest session wins, matching the generation-guard semantics).
     var pendingSamples: [Float]?
+    /// Audio from a recording interrupted (device change) while the key was still
+    /// held. Prepended to the re-armed capture at key-up so the whole hold is
+    /// transcribed and pasted once, instead of pasting the first part mid-hold.
+    var heldSamples: [Float] = []
 }
