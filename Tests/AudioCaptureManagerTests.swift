@@ -96,8 +96,6 @@ struct AudioCaptureManagerTests {
         #expect(manager.stopRecording() == [])
     }
 
-    // MARK: - drainConverterTail tests
-
     // MARK: - Cancellation tests
 
     @Test
@@ -114,71 +112,6 @@ struct AudioCaptureManagerTests {
         _ = await task.result
         // If cancellation was honoured, isRecording stays false -> stopRecording returns [].
         #expect(manager.stopRecording() == [])
-    }
-
-    @Test
-    func drainConverterTailReturnsTailAfterResampling() throws {
-        // Build a 44100Hz -> 16000Hz converter (most common real-world case).
-        let inputFormat = try #require(
-            AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: 44_100,
-                channels: 1,
-                interleaved: false
-            ))
-        let targetFormat = try #require(
-            AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: 16_000,
-                channels: 1,
-                interleaved: false
-            ))
-        let converter = try #require(AVAudioConverter(from: inputFormat, to: targetFormat))
-
-        // Feed one buffer of 44100 frames (1 second at 44.1kHz) via a normal streaming pass.
-        let frameCount: AVAudioFrameCount = 44_100
-        let inputBuffer = try #require(AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: frameCount))
-        inputBuffer.frameLength = frameCount
-        // Fill with a ramp so the converter has real signal to process.
-        if let data = inputBuffer.floatChannelData?[0] {
-            for i in 0..<Int(frameCount) {
-                data[i] = Float(i) / Float(frameCount)
-            }
-        }
-
-        // Streaming convert pass - mirrors processAudioBuffer.
-        let outputFrameCount = try #require(
-            AudioCaptureManager.outputFrameCount(
-                sampleRate: inputFormat.sampleRate,
-                inputFrames: frameCount
-            ))
-        let outputBuffer = try #require(
-            AVAudioPCMBuffer(
-                pcmFormat: targetFormat,
-                frameCapacity: outputFrameCount
-            ))
-        var inputConsumed = false
-        converter.convert(to: outputBuffer, error: nil) { _, outStatus in
-            if inputConsumed {
-                outStatus.pointee = .noDataNow
-                return nil
-            }
-            inputConsumed = true
-            outStatus.pointee = .haveData
-            return inputBuffer
-        }
-        let streamedCount = Int(outputBuffer.frameLength)
-
-        // Now drain the tail.
-        let tail = AudioCaptureManager.drainConverterTail(converter)
-
-        // The tail must be non-empty - there is filter-delay latency remaining.
-        #expect(tail.count > 0, "drainConverterTail must recover the resampler tail after streaming")
-
-        // Together they should be very close to the ideal 16000 frames (1s at 16kHz).
-        // Allow a small tolerance for the SRC filter group delay.
-        let total = streamedCount + tail.count
-        #expect(abs(total - 16_000) <= 64, "streamed + tail should approximate ideal output frame count")
     }
 
     // MARK: - Off-main tap-thread isolation regression
@@ -357,31 +290,6 @@ struct AudioCaptureManagerTests {
         // Default factory path (no injection) must behave as before.
         let manager = AudioCaptureManager()
         #expect(manager.stopRecording() == [])
-    }
-
-    @Test
-    func drainConverterTailReturnsEmptyOrHarmlessWithNoInput() throws {
-        // A converter that received no prior input should return [] or a trivially
-        // small result - it must not inject spurious audio.
-        let inputFormat = try #require(
-            AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: 16_000,
-                channels: 1,
-                interleaved: false
-            ))
-        let targetFormat = try #require(
-            AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: 16_000,
-                channels: 1,
-                interleaved: false
-            ))
-        let converter = try #require(AVAudioConverter(from: inputFormat, to: targetFormat))
-
-        let tail = AudioCaptureManager.drainConverterTail(converter)
-        // No prior input -> nothing to flush.
-        #expect(tail.count == 0, "flush with no prior input must not produce spurious samples")
     }
 
     // MARK: - Tap epoch guard (stale-engine tap regression)

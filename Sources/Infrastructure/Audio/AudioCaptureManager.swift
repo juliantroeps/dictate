@@ -299,18 +299,7 @@ final class AudioCaptureManager {
 
         // Snapshot buffer on main before handing off the engine, so no late tap
         // callback can pollute it after we return.
-        bufferLock.lock()
-        var captured = buffer
-        buffer.removeAll(keepingCapacity: true)
-        bufferLock.unlock()
-
-        // Drain the resampler tail before discarding the converter, so the SRC
-        // filter-delay latency + final partial frame are not dropped.
-        let tail: [Float] = converterLock.withLock {
-            guard let converter else { return [] }
-            return AudioCaptureManager.drainConverterTail(converter)
-        }
-        captured.append(contentsOf: tail)
+        let captured = captureBuffer()
 
         // Atomically swap to a fresh engine on main, then tear down the old one
         // off-main; removeTap/stop/dealloc dispatch into AVFAudio's private queue,
@@ -328,32 +317,6 @@ final class AudioCaptureManager {
     nonisolated static func outputFrameCount(sampleRate: Double, inputFrames: AVAudioFrameCount) -> AVAudioFrameCount? {
         guard sampleRate > 0 else { return nil }  // 0 Hz during device transitions -> inf ratio -> UInt32 trap
         return AVAudioFrameCount(Double(inputFrames) * (16_000.0 / sampleRate))
-    }
-
-    // Internal so tests can exercise the flush without audio hardware.
-    // Runs a single .endOfStream convert pass to drain the resampler tail
-    // (filter group-delay latency + last partial frame) held in the converter.
-    // nonisolated so stopRecording and handleConfigChange can call it from lock closures.
-    nonisolated static func drainConverterTail(_ converter: AVAudioConverter) -> [Float] {
-        // Tail is bounded (filter delay); a few hundred frames at 16kHz is ample.
-        guard
-            let outputBuffer = AVAudioPCMBuffer(
-                pcmFormat: converter.outputFormat,
-                frameCapacity: 4096
-            )
-        else { return [] }
-
-        var error: NSError?
-        converter.convert(to: outputBuffer, error: &error) { _, outStatus in
-            outStatus.pointee = .endOfStream
-            return nil
-        }
-        if let error {
-            AppLogger.audio.error("Converter flush error: \(error)")
-            return []
-        }
-        guard let floatData = outputBuffer.floatChannelData?[0] else { return [] }
-        return Array(UnsafeBufferPointer(start: floatData, count: Int(outputBuffer.frameLength)))
     }
 
     // Runs on the audio tap thread - must be nonisolated.
@@ -376,9 +339,8 @@ final class AudioCaptureManager {
         var error: NSError?
         var inputConsumed = false
 
-        // Hold converterLock across convert: the key-up tail drain in stopRecording /
-        // handleConfigChange runs the same converter under this lock while the tap is
-        // still live, and AVAudioConverter is not safe for concurrent convert calls.
+        // Hold converterLock across convert: main resets the converter (new recording,
+        // engine swap) while a tap callback may still be in flight.
         let converted: Bool = converterLock.withLock {
             if self.converter == nil || self.converter!.inputFormat != inputBuffer.format {
                 self.converter = AVAudioConverter(from: inputBuffer.format, to: targetFormat)
@@ -437,13 +399,8 @@ final class AudioCaptureManager {
         // on an engine nobody will ever swap out of settling again (silent hot mic).
         if isSettling {
             guard isRecording else { return }
-            var capturedSamples = captureBuffer()
+            let capturedSamples = captureBuffer()
             isRecording = false
-            let tail: [Float] = converterLock.withLock {
-                guard let converter else { return [] }
-                return AudioCaptureManager.drainConverterTail(converter)
-            }
-            capturedSamples.append(contentsOf: tail)
             // Tear the recording engine down (off-main) even while debouncing the
             // settle/validate cycle. Without this the engine stays started with a live
             // tap: if the user releases before the in-flight settle completes,
@@ -461,17 +418,8 @@ final class AudioCaptureManager {
 
         // Snapshot the buffer on main before handing off the old engine so a late
         // tap callback from the old engine cannot pollute the next recording.
-        var capturedSamples: [Float]? = isRecording ? captureBuffer() : nil
-        if capturedSamples != nil {
-            isRecording = false
-            // Drain the resampler tail before discarding the converter, so the SRC
-            // filter-delay latency + final partial frame are not dropped.
-            let tail: [Float] = converterLock.withLock {
-                guard let converter else { return [] }
-                return AudioCaptureManager.drainConverterTail(converter)
-            }
-            capturedSamples?.append(contentsOf: tail)
-        }
+        let capturedSamples: [Float]? = isRecording ? captureBuffer() : nil
+        if capturedSamples != nil { isRecording = false }
 
         swapEngine()
 
