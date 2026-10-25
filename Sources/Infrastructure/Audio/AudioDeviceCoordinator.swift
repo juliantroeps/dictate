@@ -10,7 +10,8 @@ protocol AudioDeviceControlling: AnyObject {
     func audioDeviceID(forUID uid: String) -> AudioDeviceID?
     func deviceName(for deviceID: AudioDeviceID) -> String?
     func isDeviceBluetooth(_ deviceID: AudioDeviceID) -> Bool
-    func setDefaultInputDevice(_ deviceID: AudioDeviceID)
+    func transportType(for deviceID: AudioDeviceID) -> UInt32
+    @discardableResult func setDefaultInputDevice(_ deviceID: AudioDeviceID) -> Bool
 }
 
 @MainActor
@@ -45,7 +46,11 @@ final class SystemAudioDeviceController: AudioDeviceControlling {
         SystemAudioController.isDeviceBluetooth(deviceID)
     }
 
-    func setDefaultInputDevice(_ deviceID: AudioDeviceID) {
+    func transportType(for deviceID: AudioDeviceID) -> UInt32 {
+        SystemAudioController.transportType(for: deviceID)
+    }
+
+    @discardableResult func setDefaultInputDevice(_ deviceID: AudioDeviceID) -> Bool {
         SystemAudioController.setDefaultInputDevice(deviceID)
     }
 }
@@ -56,15 +61,19 @@ final class AudioDeviceCoordinator {
     private let overlay: any OverlayControlling
     private let policy = AudioDevicePolicy()
     private let audioDevices: any AudioDeviceControlling
+    private let now: () -> Date
+    private var rateLimiter = DeviceSwitchRateLimiter()
 
     init(
         settings: any AudioDeviceSettingsProviding = Settings.shared,
         overlay: any OverlayControlling = OverlayController(),
-        audioDevices: any AudioDeviceControlling = SystemAudioDeviceController()
+        audioDevices: any AudioDeviceControlling = SystemAudioDeviceController(),
+        now: @escaping () -> Date = Date.init
     ) {
         self.settings = settings
         self.overlay = overlay
         self.audioDevices = audioDevices
+        self.now = now
     }
 
     func applyStartupSelectionIfNeeded() {
@@ -86,22 +95,21 @@ final class AudioDeviceCoordinator {
         }
     }
 
-    func handleAudioCaptureEvent(_ event: AudioCaptureEvent) {
-        switch event {
-        case .inputConfigurationChanged:
-            handleInputConfigurationChanged()
-        case .audioLevel, .recordingInterrupted:
-            break
-        }
+    func handleInputConfigurationChanged() {
+        guard !applyDevicePolicy() else { return }
+        showActiveDeviceIfIdle()
     }
 
-    func handleInputConfigurationChanged() {
-        guard let defaultID = audioDevices.defaultInputDeviceID() else { return }
+    /// Applies the manual selection / BT->built-in fallback. Returns true only if the
+    /// system default was actually changed: another config change follows, so callers
+    /// can skip work (like restarting capture) on the device we just switched away from.
+    func applyDevicePolicy() -> Bool {
+        guard let defaultID = audioDevices.defaultInputDeviceID() else { return false }
 
         let selectedUID = settings.selectedInputDeviceUID
         let resolvedSelectedID = selectedUID.flatMap { audioDevices.audioDeviceID(forUID: $0) }
 
-        switch policy.action(
+        let action = policy.action(
             for: .init(
                 selectedInputDeviceUID: selectedUID,
                 resolvedSelectedInputID: resolvedSelectedID,
@@ -109,21 +117,36 @@ final class AudioDeviceCoordinator {
                 builtInInputID: audioDevices.builtInInputDeviceID(),
                 defaultInputIsBluetooth: audioDevices.isDeviceBluetooth(defaultID)
             )
-        ) {
-        case .applyManualSelection(let resolvedID):
-            audioDevices.setDefaultInputDevice(resolvedID)
-            AppLogger.device.info("Re-applied manual selection: \(selectedUID ?? "unknown")")
-            return
-        case .fallbackToBuiltIn(let builtInID):
-            audioDevices.setDefaultInputDevice(builtInID)
-            AppLogger.device.info("Auto-fallback: set system default to built-in mic")
-            return
+        )
+        let targetID: AudioDeviceID
+        let label: String
+        switch action {
+        case .applyManualSelection(let id):
+            (targetID, label) = (id, "Re-apply manual selection")
+        case .fallbackToBuiltIn(let id):
+            (targetID, label) = (id, "Auto-fallback to built-in")
         case .keepCurrent:
-            break
+            return false
         }
 
+        let from = describe(defaultID)
+        let to = describe(targetID)
+        guard rateLimiter.allow(at: now()) else {
+            AppLogger.device.info("\(label) skipped (rate limited): \(from) -> \(to)")
+            return false
+        }
+        guard audioDevices.setDefaultInputDevice(targetID) else {
+            AppLogger.device.error("\(label) failed: \(from) -> \(to)")
+            return false
+        }
+        AppLogger.device.info("\(label): \(from) -> \(to)")
+        return true
+    }
+
+    func showActiveDeviceIfIdle() {
         guard case .idle = overlay.state.phase else { return }
 
+        let resolvedSelectedID = settings.selectedInputDeviceUID.flatMap { audioDevices.audioDeviceID(forUID: $0) }
         let activeName: String
         if let resolvedSelectedID,
             let name = audioDevices.deviceName(for: resolvedSelectedID)
@@ -133,6 +156,14 @@ final class AudioDeviceCoordinator {
             activeName = audioDevices.defaultInputDeviceName() ?? "Unknown mic"
         }
         overlay.showInfo(activeName, duration: 2.0)
+    }
+
+    /// "Name [btle]" - device name plus CoreAudio transport type fourcc, for logs.
+    private func describe(_ deviceID: AudioDeviceID) -> String {
+        let name = audioDevices.deviceName(for: deviceID) ?? "id \(deviceID)"
+        let transport = audioDevices.transportType(for: deviceID).bigEndian
+        let code = withUnsafeBytes(of: transport) { String(bytes: $0, encoding: .ascii) } ?? "?"
+        return "\(name) [\(code.trimmingCharacters(in: .controlCharacters))]"
     }
 
     private func handleSelectionChange() {

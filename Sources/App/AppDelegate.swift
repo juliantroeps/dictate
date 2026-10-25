@@ -59,8 +59,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         audioCapture.onEvent = { @Sendable [weak self] event in
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                guard case .inputConfigurationChanged = event else {
+                    self.dictationCoordinator.handleAudioCaptureEvent(event)
+                    return
+                }
+                // Our own default switch triggers another config change; skip restarting
+                // capture on the device we just switched away from (re-arms on the next).
+                guard !self.audioDeviceCoordinator.applyDevicePolicy() else { return }
                 self.dictationCoordinator.handleAudioCaptureEvent(event)
-                self.audioDeviceCoordinator.handleAudioCaptureEvent(event)
+                self.audioDeviceCoordinator.showActiveDeviceIfIdle()
             }
         }
 

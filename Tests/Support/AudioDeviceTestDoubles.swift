@@ -40,8 +40,16 @@ final class FakeAudioDeviceController: AudioDeviceControlling, @unchecked Sendab
         bluetoothDeviceIDs.contains(deviceID)
     }
 
-    func setDefaultInputDevice(_ deviceID: AudioDeviceID) {
-        defaultInputDeviceIDValue = deviceID
+    func transportType(for deviceID: AudioDeviceID) -> UInt32 {
+        0
+    }
+
+    var setDefaultInputDeviceSucceeds = true
+
+    @discardableResult func setDefaultInputDevice(_ deviceID: AudioDeviceID) -> Bool {
         setDefaultInputDeviceCalls.append(deviceID)
+        guard setDefaultInputDeviceSucceeds else { return false }
+        defaultInputDeviceIDValue = deviceID
+        return true
     }
 }
