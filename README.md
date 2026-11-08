@@ -40,7 +40,7 @@ No quarantine stripping needed when building locally.
 
 ## Requirements
 
-- macOS 14 Sonoma or later
+- macOS 26 Tahoe or later
 - Apple Silicon
 - Xcode 26+ (development only)
 

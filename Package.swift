@@ -1,10 +1,10 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 
 import PackageDescription
 
 let package = Package(
     name: "dictate",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v26)],
     dependencies: [
         .package(url: "https://github.com/argmaxinc/argmax-oss-swift.git", .upToNextMinor(from: "1.1.1")),
         .package(url: "https://github.com/getsentry/sentry-cocoa", from: "9.17.1"),

@@ -352,7 +352,7 @@ final class AudioCaptureManager {
     }
 
     // Runs on the audio tap thread - must be nonisolated.
-    // All state access is via bufferLock/converterLock or nonisolated(unsafe) targetFormat.
+    // All state access is via bufferLock/converterLock or the immutable, Sendable targetFormat.
     nonisolated func processAudioBuffer(_ inputBuffer: AVAudioPCMBuffer) {
         guard
             let outputFrameCount = AudioCaptureManager.outputFrameCount(

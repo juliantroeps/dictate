@@ -29,7 +29,7 @@ scripts/tag-release.sh              # commit, tag, push, gh release
 
 ## Architecture
 
-SPM macOS 14+, Swift 6 strict concurrency. Targets: `DictateCore` (library: `Sources/DictateCore/` - `WhisperKitEngine`/`TranscriptionEngine`, `PromptProvider`, `AppLogger`; must not import Sentry or UI), `dictate` (app executable, rest of `Sources/`, excludes the other two dirs), `dictate-eval` (eval executable, `Sources/dictate-eval/`), `dictateTests`. App `Sources/` grouped: `App/` `Features/` `Infrastructure/` `Support/` `UI/`.
+SPM macOS 26+, Swift 6 strict concurrency. Targets: `DictateCore` (library: `Sources/DictateCore/` - `WhisperKitEngine`/`TranscriptionEngine`, `PromptProvider`, `AppLogger`; must not import Sentry or UI), `dictate` (app executable, rest of `Sources/`, excludes the other two dirs), `dictate-eval` (eval executable, `Sources/dictate-eval/`), `dictateTests`. App `Sources/` grouped: `App/` `Features/` `Infrastructure/` `Support/` `UI/`.
 
 **Core flow:** `DictationCoordinator` orchestrates dictation. Fn key press (via `KeyListener` CGEventTap) triggers `AudioCaptureManager` recording. On release, audio goes through `EngineCoordinator` -> `TranscriptionEngine` (WhisperKit), then `TextInjector` places text at cursor. `AppDelegate` is thin wiring (status item, popover, builds coordinators).
 
@@ -60,7 +60,7 @@ Key components (by directory):
 - **Accessibility permission** must be granted to Terminal.app (or whichever terminal), not to the compiled binary
 - **`swift run` invalidates TCC** - always `swift build` then run binary directly
 - **Toolchain: Xcode 26+ required** (macOS 26+ SDK; verified: Xcode 27.2 / Swift 6.4.2 / macOS 27.2 SDK; CI + release run on the `xcode-27` runner). Older SDKs are unsupported: argmax-oss-swift 1.1.x needs `MLMultiArrayDataType.int8` (macOS 26 SDK), and `AudioCaptureManager.targetFormat` relies on `AVAudioFormat` being `Sendable`
-- **SDK stamp / build system**: Swift 6.4's default build system (swiftbuild) stamps binaries with SDK 14.0 (= deployment target), so macOS runs them with pre-26 behavior (no Liquid Glass). `scripts/build.sh` uses `--build-system native` (stamps SDK 27.2) for releases. To see release UI in dev, build with `swift build --build-system native` too. Check: `otool -l <bin> | grep -A4 LC_BUILD_VERSION`
+- **Deployment target = SDK stamp**: Swift 6.4's default build system stamps binaries with the deployment target as SDK version. The macOS 26 target is what enables macOS 26+ behavior (Liquid Glass); lowering it below 26 silently reverts the app to the pre-26 look. Check: `otool -l <bin> | grep -A4 LC_BUILD_VERSION`
 - **`AVAudioApplication.requestRecordPermission()`** crashes on macOS 15 with Swift 6 async/await - use ObjC-style callback (`AVCaptureDevice.requestAccess(for:) { granted in ... }`)
 - **`@MainActor` + Timer callbacks** - use `MainActor.assumeIsolated` instead of async bridging
 - Overlay window uses `.screenSaver` level + `.fullScreenAuxiliary` collection behavior to appear above full-screen apps

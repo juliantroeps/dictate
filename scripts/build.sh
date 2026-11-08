@@ -6,11 +6,9 @@ BUILD_NUMBER="${BUILD_NUMBER:-$(date +%Y%m%d%H%M%S)}"
 DIST="dist"
 APP="$DIST/Dictate.app"
 
-# Build (Apple Silicon only). Native build system: swiftbuild (Swift 6.4 default) stamps the
-# binary with the deployment target as SDK version (14.0), opting out of macOS 26+ SDK behavior.
-BUILD=(-c release --build-system native)
-swift build "${BUILD[@]}" --product dictate
-BIN="$(swift build "${BUILD[@]}" --show-bin-path)/dictate"
+# Build (Apple Silicon only)
+swift build -c release --product dictate
+BIN="$(swift build -c release --show-bin-path)/dictate"
 
 # Assemble .app bundle
 rm -rf "$APP"
@@ -30,4 +28,3 @@ dsymutil "$BIN" -o "$DIST/dictate.dSYM"
 
 echo "Built $APP (v$VERSION build $BUILD_NUMBER)"
 file "$APP/Contents/MacOS/dictate"
-otool -l "$APP/Contents/MacOS/dictate" | grep -A4 LC_BUILD_VERSION | grep -E "minos|sdk"

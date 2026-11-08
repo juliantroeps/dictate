@@ -57,7 +57,8 @@ scripts/eval.sh --help
 ```
 
 `scripts/eval.sh` runs `swift build -c release --product dictate-eval` and then the binary. Latency is only
-meaningful from the release build. A debug build works for functional checks: `swift build && .build/debug/dictate-eval C0`.
+meaningful from the release build. A debug build works for functional checks:
+`swift build && .build/debug/dictate-eval C0`.
 
 Running with no config names runs every `*.json` in `eval/configs`, which downloads every model (medium.en is
 ~1.5 GB). Name the configs you want. The first config is the baseline for paired deltas. Models are cached in
