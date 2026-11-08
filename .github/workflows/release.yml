@@ -9,7 +9,7 @@ jobs:
     concurrency:
       group: release-main
       cancel-in-progress: false
-    runs-on: macos-15
+    runs-on: xcode-27
     permissions:
       contents: write
 
@@ -34,8 +34,8 @@ jobs:
           path: |
             .build
             ~/.swiftpm
-          key: ${{ runner.os }}-swift-${{ hashFiles('Package.resolved') }}
-          restore-keys: ${{ runner.os }}-swift-
+          key: ${{ runner.os }}-xcode27-swift-${{ hashFiles('Package.resolved') }}
+          restore-keys: ${{ runner.os }}-xcode27-swift-
 
       - name: Build and package
         if: steps.semver.outputs.new_version != ''

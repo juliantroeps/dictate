@@ -59,7 +59,7 @@ Key components (by directory):
 
 - **Accessibility permission** must be granted to Terminal.app (or whichever terminal), not to the compiled binary
 - **`swift run` invalidates TCC** - always `swift build` then run binary directly
-- **argmax-oss-swift 1.1.x** guards `MLMultiArrayDataType.int8` with `#if compiler(>=6.2)`, but `.int8` needs the macOS 26 SDK. A 6.2 compiler on a macOS 15 SDK (e.g. swiftly 6.2.3 + Xcode 16.0) fails to build (`.int8` missing, `mach_task_self_` not concurrency-safe). Use Swift 6.1.x (Xcode 16.3+) or Xcode 26. `Tests/` use trailing commas in calls: need Swift 6.1+
+- **argmax-oss-swift 1.1.x** guards `MLMultiArrayDataType.int8` with `#if compiler(>=6.2)`, but `.int8` needs the macOS 26 SDK. A 6.2 compiler on a macOS 15 SDK (e.g. swiftly 6.2.3 + Xcode 16.0) fails to build (`.int8` missing, `mach_task_self_` not concurrency-safe). Use Swift 6.1.x (Xcode 16.3+) or Xcode 26+ (verified: Xcode 27.2 / Swift 6.4.2 / macOS 27.2 SDK). `Tests/` use trailing commas in calls: need Swift 6.1+
 - **`AVAudioApplication.requestRecordPermission()`** crashes on macOS 15 with Swift 6 async/await - use ObjC-style callback (`AVCaptureDevice.requestAccess(for:) { granted in ... }`)
 - **`@MainActor` + Timer callbacks** - use `MainActor.assumeIsolated` instead of async bridging
 - Overlay window uses `.screenSaver` level + `.fullScreenAuxiliary` collection behavior to appear above full-screen apps

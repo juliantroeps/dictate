@@ -10,18 +10,15 @@ concurrency:
 
 jobs:
   validate:
-    runs-on: macos-15
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
 
       - name: Cache Homebrew
         uses: actions/cache@v4
         with:
-          path: |
-            ~/Library/Caches/Homebrew
-            /usr/local/Cellar/swiftlint
-            /usr/local/Cellar/swift-format
-          key: brew-${{ runner.os }}-swiftlint-swift-format
+          path: ~/Library/Caches/Homebrew
+          key: brew-${{ runner.os }}-xcode27-swiftlint-swift-format
 
       - name: Install lint tools
         run: brew install swiftlint swift-format
@@ -30,8 +27,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .build
-          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
-          restore-keys: spm-${{ runner.os }}-
+          key: spm-${{ runner.os }}-xcode27-${{ hashFiles('Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-xcode27-
 
       - name: Build
         run: swift build
