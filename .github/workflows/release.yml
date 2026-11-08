@@ -9,7 +9,7 @@ jobs:
     concurrency:
       group: release-main
       cancel-in-progress: false
-    runs-on: macos-15
+    runs-on: xcode-27
     permissions:
       contents: write
 
@@ -27,15 +27,18 @@ jobs:
           default_bump: false
           custom_release_rules: refactor:minor,perf:patch,style:patch
 
+      - name: Toolchain id
+        if: steps.semver.outputs.new_version != ''
+        id: toolchain
+        run: echo "id=$(swift --version 2>&1 | shasum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
       - name: Cache Swift packages
         if: steps.semver.outputs.new_version != ''
         uses: actions/cache@v4
         with:
-          path: |
-            .build
-            ~/.swiftpm
-          key: ${{ runner.os }}-swift-${{ hashFiles('Package.resolved') }}
-          restore-keys: ${{ runner.os }}-swift-
+          path: .build
+          key: ${{ runner.os }}-${{ steps.toolchain.outputs.id }}-swift-${{ hashFiles('Package.resolved') }}
+          restore-keys: ${{ runner.os }}-${{ steps.toolchain.outputs.id }}-swift-
 
       - name: Build and package
         if: steps.semver.outputs.new_version != ''

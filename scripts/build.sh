@@ -7,20 +7,20 @@ DIST="dist"
 APP="$DIST/Dictate.app"
 
 # Build (Apple Silicon only)
-swift build -c release --product dictate \
-    -Xswiftc -no-whole-module-optimization
+swift build -c release --product dictate
+BIN="$(swift build -c release --show-bin-path)/dictate"
 
 # Assemble .app bundle
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 mkdir -p "$APP/Contents/Resources"
 
-cp "$(swift build --show-bin-path -c release)/dictate" "$APP/Contents/MacOS/"
+cp "$BIN" "$APP/Contents/MacOS/"
 cp Resources/Info.plist "$APP/Contents/"
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 
 # Extract dSYM for Sentry symbolication (kept out of the .app / DMG)
-dsymutil "$(swift build --show-bin-path -c release)/dictate" -o "$DIST/dictate.dSYM"
+dsymutil "$BIN" -o "$DIST/dictate.dSYM"
 
 # Stamp version into Info.plist
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"

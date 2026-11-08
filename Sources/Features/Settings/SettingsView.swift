@@ -171,6 +171,9 @@ struct SettingsView: View {
         }
         .padding()
         .frame(width: 280)
+        // Popover glass is too transparent over light content (e.g. white web pages) and
+        // ignores the system Liquid Glass slider; a thick material keeps text readable.
+        .background(.thickMaterial)
         .onAppear {
             refreshController.start()
         }
