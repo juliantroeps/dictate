@@ -41,7 +41,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.target = self
         }
 
-        popover.contentViewController = NSHostingController(rootView: SettingsView(engineRuntimeState: runtimeState))
+        let settingsController = NSHostingController(rootView: SettingsView(engineRuntimeState: runtimeState))
+        // Popover sizes from preferredContentSize; without this, macOS 26+ SDK controls render
+        // taller than the initial size and the top of the view is clipped.
+        settingsController.sizingOptions = .preferredContentSize
+        popover.contentViewController = settingsController
         popover.behavior = .transient
 
         AccessibilityPermission.requestIfNeeded()

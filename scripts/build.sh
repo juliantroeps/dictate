@@ -6,21 +6,23 @@ BUILD_NUMBER="${BUILD_NUMBER:-$(date +%Y%m%d%H%M%S)}"
 DIST="dist"
 APP="$DIST/Dictate.app"
 
-# Build (Apple Silicon only)
-swift build -c release --product dictate \
-    -Xswiftc -no-whole-module-optimization
+# Build (Apple Silicon only). Native build system: swiftbuild (Swift 6.4 default) stamps the
+# binary with the deployment target as SDK version (14.0), opting out of macOS 26+ SDK behavior.
+BUILD=(-c release --build-system native)
+swift build "${BUILD[@]}" --product dictate
+BIN="$(swift build "${BUILD[@]}" --show-bin-path)/dictate"
 
 # Assemble .app bundle
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 mkdir -p "$APP/Contents/Resources"
 
-cp "$(swift build --show-bin-path -c release)/dictate" "$APP/Contents/MacOS/"
+cp "$BIN" "$APP/Contents/MacOS/"
 cp Resources/Info.plist "$APP/Contents/"
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 
 # Extract dSYM for Sentry symbolication (kept out of the .app / DMG)
-dsymutil "$(swift build --show-bin-path -c release)/dictate" -o "$DIST/dictate.dSYM"
+dsymutil "$BIN" -o "$DIST/dictate.dSYM"
 
 # Stamp version into Info.plist
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
@@ -28,3 +30,4 @@ dsymutil "$(swift build --show-bin-path -c release)/dictate" -o "$DIST/dictate.d
 
 echo "Built $APP (v$VERSION build $BUILD_NUMBER)"
 file "$APP/Contents/MacOS/dictate"
+otool -l "$APP/Contents/MacOS/dictate" | grep -A4 LC_BUILD_VERSION | grep -E "minos|sdk"
