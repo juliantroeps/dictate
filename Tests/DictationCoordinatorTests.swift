@@ -539,7 +539,7 @@ struct DictationCoordinatorTests {
         settings.minHoldDuration = 0.1
         settings.muteSystemAudio = true
 
-        var currentTime: UInt64 = 1_000_000_000
+        let currentTime: UInt64 = 1_000_000_000
         let audioCapture = FakeAudioCaptureManager()
         let overlay = FakeOverlayController()
         let engine = FakeTranscriptionEngineCoordinator()

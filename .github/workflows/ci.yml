@@ -14,21 +14,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache Homebrew
-        uses: actions/cache@v4
-        with:
-          path: ~/Library/Caches/Homebrew
-          key: brew-${{ runner.os }}-xcode27-swiftlint-swift-format
-
       - name: Install lint tools
-        run: brew install swiftlint swift-format
+        run: brew install swiftlint
+
+      - name: Toolchain id
+        id: toolchain
+        run: echo "id=$(swift --version 2>&1 | shasum | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
       - name: Cache SPM
         uses: actions/cache@v4
         with:
           path: .build
-          key: spm-${{ runner.os }}-xcode27-${{ hashFiles('Package.resolved') }}
-          restore-keys: spm-${{ runner.os }}-xcode27-
+          key: spm-${{ runner.os }}-${{ steps.toolchain.outputs.id }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-${{ steps.toolchain.outputs.id }}-
 
       - name: Build
         run: swift build
@@ -40,4 +38,4 @@ jobs:
         run: swiftlint lint --strict
 
       - name: Format lint
-        run: swift-format lint --configuration .swiftformat -r Sources Tests
+        run: swift format lint --configuration .swiftformat -r Sources Tests

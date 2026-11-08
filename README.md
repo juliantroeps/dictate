@@ -42,7 +42,7 @@ No quarantine stripping needed when building locally.
 
 - macOS 14 Sonoma or later
 - Apple Silicon
-- Swift 6.0 / Xcode 16+ (development only)
+- Xcode 26+ (development only)
 
 ## Development
 

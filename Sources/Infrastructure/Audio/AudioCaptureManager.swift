@@ -20,9 +20,8 @@ final class AudioCaptureManager {
     // churning engines (build + off-main teardown) on every default-input change.
     private var engineStale = false
     private var configChangeObserver: Any?
-    // targetFormat is immutable and accessed from the audio tap thread (nonisolated);
-    // nonisolated(unsafe) is safe because it is set once in init and never mutated.
-    nonisolated(unsafe) private let targetFormat = AVAudioFormat(
+    // Immutable and Sendable (macOS 26+ SDK), so safe to read from the audio tap thread.
+    private let targetFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32,
         sampleRate: 16_000,
         channels: 1,
