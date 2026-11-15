@@ -99,8 +99,13 @@ Running with no config names runs every `*.json` in `eval/configs`, which downlo
 | C6 | distil-large-v3 + prompt | Not benched yet; may hit the same empty bug |
 | C6b | distil-large-v3, prompt off | |
 | C7 | medium.en + prompt | |
+| C8a / C8b | Apple `DictationTranscriber`, terms on / off | `SpeechAnalyzerEngine`; 17.1% / 18.3% nWER, 5/12 / 1/12 terms on 24 real clips (C0: 3.7%, 11/12) |
+| C8c / C8d | Apple `SpeechTranscriber`, terms off / on | 12.6% nWER, 2/12 terms either way: contextual strings ignored |
 
-Not covered here: Parakeet (C8) needs an engine behind `TranscriptionEngine` first.
+Apple configs (`model: "apple-dictation"` / `"apple-speech"`) use the OS-managed model; `prompt` toggles contextual
+strings (`PromptProvider.defaultTerms`, or `termsFile`), `options` is rejected.
+
+Not covered here: Parakeet (C9) needs an engine behind `TranscriptionEngine` first.
 Note `large-v3_turbo_954MB` in old caches is full large-v3, not turbo.
 
 ## 3. Read the results

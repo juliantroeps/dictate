@@ -59,4 +59,14 @@ struct EvalConfigTests {
         #expect(applied.promptTokens == [1, 2, 3])
         #expect(applied.usePrefillPrompt)
     }
+
+    @Test func appleModelsUseTermsAndRejectOptions() throws {
+        let on = try load(#"{ "model": "apple-dictation" }"#)
+        #expect(on.isApple)
+        #expect(on.terms == PromptProvider.defaultTerms)
+        #expect(try load(#"{ "model": "apple-speech", "prompt": false }"#).terms == nil)
+        #expect(throws: EvalConfig.LoadError.self) {
+            try load(#"{ "model": "apple-dictation", "options": { "windowClipTime": 0 } }"#)
+        }
+    }
 }

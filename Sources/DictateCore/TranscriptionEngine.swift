@@ -19,6 +19,12 @@ public struct TranscriptionDetail: Sendable {
     /// Temperature each decoded segment settled on; any value above 0 means a fallback re-decode.
     public let segmentTemperatures: [Float]
     public let fallbackCount: Int
+
+    public init(text: String, segmentTemperatures: [Float] = [], fallbackCount: Int = 0) {
+        self.text = text
+        self.segmentTemperatures = segmentTemperatures
+        self.fallbackCount = fallbackCount
+    }
 }
 
 // MARK: - WhisperKitEngine
