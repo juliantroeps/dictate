@@ -49,7 +49,7 @@ final class EngineCoordinator: TranscriptionEngineCoordinating {
         runtimeState: DictationRuntimeState = DictationRuntimeState(),
         engine: TranscriptionEngine? = nil,
         engineFactory: @escaping (String) -> TranscriptionEngine = { model in
-            WhisperKitEngine(model: model, prompt: { PromptProvider.resolve(forModel: model) })
+            WhisperKitEngine(model: model)
         },
         retryDelay: @escaping (Int) -> Duration = { .seconds(Double($0) * 2) },
         captureRecorder: CaptureRecorder? = CaptureRecorder.fromEnvironment(),

@@ -43,11 +43,6 @@ struct SettingsView: View {
                     }
                 }
 
-                if !PromptProvider.supportsPrompt(model: settings.whisperModel) {
-                    Text("Vocabulary hints are not used with this model.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
                 switch engineRuntimeState.engineStatus {
                 case .loading:
                     HStack(spacing: 4) {

@@ -14,23 +14,22 @@ public enum PromptProvider {
         Terraform, Supabase, Prisma, pnpm, Cursor, Claude.
         """
 
-    /// WhisperKit 0.15 returns "" for the multilingual large-v3 turbo family when prompt tokens
-    /// are set: its decode loop honors an `<|endoftext|>` sampled while the prompt is force-fed.
-    /// Measured empty on 100% of clips for _547MB and _turbo_632MB; the rest of the family is
-    /// assumed alike. Fixed upstream in argmax-oss-swift 1.1.0.
-    static let promptlessModelPrefixes = ["openai_whisper-large-v3-v20240930"]
-
-    public static func supportsPrompt(model: String) -> Bool {
-        !promptlessModelPrefixes.contains { model.hasPrefix($0) }
-    }
-
-    /// The prompt to condition `model` on, or nil when it can't take one.
-    public static func resolve(forModel model: String) -> String? {
-        supportsPrompt(model: model) ? resolve() : nil
-    }
-
     public static func resolve() -> String {
         resolve(from: promptFilePath)
+    }
+
+    /// Vocabulary list for engines biased by phrases rather than a prompt (eval-only SpeechAnalyzer).
+    public static let defaultTerms = [
+        "Next.js", "TypeScript", "GraphQL", "PostgreSQL", "MongoDB", "Kubernetes",
+        "Terraform", "Supabase", "Prisma", "pnpm", "Cursor", "Claude",
+    ]
+
+    /// One term per line, `#` comments.
+    public static func parseTerms(contentsOf url: URL) -> [String] {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        return text.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("#") }
     }
 
     static func resolve(from promptURL: URL) -> String {

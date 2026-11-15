@@ -11,6 +11,8 @@ import WhisperKit
 /// - `prompt`: true (default) conditions on the app's default vocabulary prompt, false disables it.
 ///   `promptText` / `promptFile` replace the default text. `~/.dictate/prompt.txt` is never read
 ///   implicitly, so results do not depend on the machine; point `promptFile` at it to mimic your app.
+/// - `model: "apple-dictation"` / `"apple-speech"` runs Apple's SpeechAnalyzer instead. `prompt` then toggles contextual
+///   strings: `PromptProvider.defaultTerms`, or one per line from `termsFile`. `options` must be empty.
 /// - `options`: overrides on top of the app's exact DecodingOptions (`WhisperKitEngine.decodingOptions`),
 ///   keyed by WhisperKit `DecodingOptions` property name. `null` clears an optional such as
 ///   `firstTokenLogProbThreshold`.
@@ -18,9 +20,12 @@ struct EvalConfig {
     let name: String
     let model: String
     let promptText: String?
+    /// SpeechAnalyzer contextual strings; nil when the model is WhisperKit or `prompt` is false.
+    var terms: [String]?
     let options: [String: Any]
 
-    var promptEnabled: Bool { promptText != nil }
+    var isApple: Bool { SpeechAnalyzerEngine.isModelID(model) }
+    var promptEnabled: Bool { isApple ? terms != nil : promptText != nil }
 
     enum LoadError: Error, CustomStringConvertible {
         case invalid(String)
@@ -32,7 +37,7 @@ struct EvalConfig {
     }
 
     private static let knownKeys: Set<String> = [
-        "name", "model", "prompt", "promptText", "promptFile", "options",
+        "name", "model", "prompt", "promptText", "promptFile", "termsFile", "options",
     ]
 
     /// Every DecodingOptions property (optionals are absent from an encoded default, so list explicitly).
@@ -74,8 +79,22 @@ struct EvalConfig {
         if let unknown = Set(options.keys).subtracting(optionKeys).sorted().first {
             throw LoadError.invalid("\(url.lastPathComponent): unknown decoding option \"\(unknown)\"")
         }
-        let config = EvalConfig(
+        var config = EvalConfig(
             name: (raw["name"] as? String) ?? fallbackName, model: model, promptText: promptText, options: options)
+        if config.isApple {
+            guard options.isEmpty else {
+                throw LoadError.invalid("\(url.lastPathComponent): \"options\" are WhisperKit-only")
+            }
+            if promptText != nil {
+                if let file = raw["termsFile"] as? String {
+                    let path = NSString(string: file).expandingTildeInPath
+                    config.terms = PromptProvider.parseTerms(contentsOf: URL(fileURLWithPath: path))
+                } else {
+                    config.terms = PromptProvider.defaultTerms
+                }
+            }
+            return config
+        }
         // Fail on bad option values now rather than mid-run.
         do {
             _ = try Self.apply(config.options, to: DecodingOptions())
@@ -108,11 +127,16 @@ struct EvalConfig {
             : (try? String(
                 data: JSONSerialization.data(withJSONObject: options, options: [.sortedKeys]), encoding: .utf8))
                 ?? "?"
+        if isApple { return "model=\(model) terms=\(terms?.count ?? 0)" }
         return "model=\(model) prompt=\(promptEnabled ? "on" : "off") options=\(optionsText)"
     }
 
     /// Engine wired exactly like the app's, with this config's prompt and option overrides.
-    func makeEngine() -> WhisperKitEngine {
+    func makeEngine() -> any EvalEngine {
+        if isApple {
+            let terms = terms ?? []
+            return SpeechAnalyzerEngine(module: SpeechAnalyzerEngine.Module(rawValue: model)!, terms: { terms })
+        }
         let promptText = promptText
         let optionsData = (try? JSONSerialization.data(withJSONObject: options)) ?? Data()
         return WhisperKitEngine(
@@ -124,5 +148,18 @@ struct EvalConfig {
                     decoding = applied
                 }
             })
+    }
+}
+
+/// What the runner needs beyond `TranscriptionEngine`: decode diagnostics per clip.
+protocol EvalEngine: TranscriptionEngine {
+    func transcribeDetailed(audioSamples: [Float]) async throws -> TranscriptionDetail
+}
+
+extension WhisperKitEngine: EvalEngine {}
+
+extension SpeechAnalyzerEngine: EvalEngine {
+    func transcribeDetailed(audioSamples: [Float]) async throws -> TranscriptionDetail {
+        TranscriptionDetail(text: try await transcribe(audioSamples: audioSamples))
     }
 }
